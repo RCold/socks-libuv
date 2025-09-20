@@ -37,7 +37,7 @@ static int send_socks5_auth_response(session_t *session, const uint8_t code) {
 
 static int parse_socks5_auth(session_t *session) {
   assert(session != NULL);
-  const buf_t *buf = &session->read_buf;
+  buf_t *buf = &session->read_buf;
   if (buf->size < 2) {
     return 0;
   }
@@ -69,7 +69,7 @@ static int parse_socks5_auth(session_t *session) {
     return -1;
   }
   session->request.ver = buf->base[0];
-  buf_consume(&session->read_buf, 2 + n);
+  buf_consume(buf, 2 + n);
   return 2 + n;
 }
 
@@ -120,7 +120,7 @@ int parse_socks5_request(session_t *session) {
       return auth_ret;
     }
   }
-  const buf_t *buf = &session->read_buf;
+  buf_t *buf = &session->read_buf;
   if (buf->size < 4) {
     return 0;
   }
@@ -165,7 +165,7 @@ int parse_socks5_request(session_t *session) {
     addr->sin_family = AF_INET;
     memcpy(&addr->sin_addr, buf->base + 4, 4);
     memcpy(&addr->sin_port, buf->base + 8, 2);
-    buf_consume(&session->read_buf, 10);
+    buf_consume(buf, 10);
     return 10;
   case SOCKS5_ADDR_TYPE_DOMAIN_NAME:
     if (buf->size < 5) {
@@ -192,7 +192,7 @@ int parse_socks5_request(session_t *session) {
     session->request.domain_name[n] = '\0';
     addr->sin_family = AF_INET;
     memcpy(&addr->sin_port, buf->base + 5 + n, 2);
-    buf_consume(&session->read_buf, 5 + n + 2);
+    buf_consume(buf, 5 + n + 2);
     return 5 + n + 2;
   case SOCKS5_ADDR_TYPE_IPV6:
     if (buf->size < 22) {
@@ -201,7 +201,7 @@ int parse_socks5_request(session_t *session) {
     addr6->sin6_family = AF_INET6;
     memcpy(&addr6->sin6_addr, buf->base + 4, 16);
     memcpy(&addr6->sin6_port, buf->base + 20, 2);
-    buf_consume(&session->read_buf, 22);
+    buf_consume(buf, 22);
     return 22;
   default:
     LOG_ERROR(

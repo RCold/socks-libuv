@@ -30,7 +30,7 @@ int send_socks4_response(session_t *session, const uint8_t code) {
 
 int parse_socks4_request(session_t *session) {
   assert(session != NULL);
-  const buf_t *buf = &session->read_buf;
+  buf_t *buf = &session->read_buf;
   if (buf->size < 8) {
     return 0;
   }
@@ -111,9 +111,9 @@ int parse_socks4_request(session_t *session) {
     }
     memcpy(session->request.domain_name, buf->base + domain_start,
            domain_end - domain_start);
-    buf_consume(&session->read_buf, domain_end);
+    buf_consume(buf, domain_end);
     return domain_end;
   }
-  buf_consume(&session->read_buf, user_id_end);
+  buf_consume(buf, user_id_end);
   return user_id_end;
 }
