@@ -59,10 +59,8 @@ static int parse_socks5_auth(session_t *session) {
     return 0;
   }
   if (memchr(session->read_buf.base + 2, SOCKS5_METHOD_NO_AUTH, n) == NULL) {
-    LOG_ERROR(TAG,
-              "failed to handle socks5 request from client %s: no acceptable "
-              "auth methods",
-              session->client_addr);
+    LOG_INFO(TAG, "socks5 request from %s rejected: authentication failed",
+             session->client_addr);
     return send_socks5_auth_response(session, SOCKS5_METHOD_NO_ACCEPTABLE);
   }
   if (send_socks5_auth_response(session, SOCKS5_METHOD_NO_AUTH) != 0) {
