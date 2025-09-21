@@ -3,8 +3,36 @@ project(socks-libuv C)
 
 set(CMAKE_C_STANDARD 99)
 
+include(CheckIncludeFile)
+set(REQUIRED_HEADERS
+    assert.h
+    ctype.h
+    getopt.h
+    inttypes.h
+    signal.h
+    stdarg.h
+    stdint.h
+    stdio.h
+    stdlib.h
+    string.h
+    time.h
+)
+foreach(header ${REQUIRED_HEADERS})
+    string(REPLACE "." "_" header_var ${header})
+    string(TOUPPER ${header_var} header_var)
+    set(header_var "HAVE_${header_var}")
+    check_include_file("${header}" ${header_var})
+    if(NOT ${header_var})
+        message(FATAL_ERROR "${header} header file not found - this is required for compilation")
+    endif()
+endforeach()
+
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(LIBUV REQUIRED IMPORTED_TARGET libuv-static>=1.0.0)
+check_include_file("uv.h" HAVE_UV_H)
+if(NOT HAVE_UV_H)
+    message(FATAL_ERROR "uv.h header file not found - please install libuv development package")
+endif()
 
 add_executable(socks-libuv
         src/logging.c
