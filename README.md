@@ -26,7 +26,8 @@ A minimal SOCKS server implemented based on [libuv](https://github.com/libuv/lib
 - Windows
 
 1. Install MSYS2: https://www.msys2.org/
-2. Install dependencies:
+2. Open "MSYS2 MINGW64" shell
+3. Install dependencies:
 
 ```bash
 pacman -S mingw-w64-x86_64-cmake mingw-w64-x86_64-gcc mingw-w64-x86_64-libuv mingw-w64-x86_64-pkgconf
