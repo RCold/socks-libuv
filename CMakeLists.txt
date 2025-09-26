@@ -29,10 +29,6 @@ endforeach()
 
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(LIBUV REQUIRED IMPORTED_TARGET libuv-static>=1.0.0)
-check_include_file("uv.h" HAVE_UV_H)
-if(NOT HAVE_UV_H)
-    message(FATAL_ERROR "uv.h header file not found - please install libuv development package")
-endif()
 
 add_executable(socks-libuv
         src/logging.c
