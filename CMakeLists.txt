@@ -31,6 +31,7 @@ find_package(PkgConfig REQUIRED)
 pkg_check_modules(LIBUV REQUIRED IMPORTED_TARGET libuv-static>=1.0.0)
 
 add_executable(socks-libuv
+        src/auth.c
         src/logging.c
         src/main.c
         src/socks.c
