@@ -6,13 +6,14 @@
 #include <uv.h>
 
 #include "logging.h"
+#include "socks.h"
 #include "socks4.h"
 #include "tcp.h"
 #include "util.h"
 
 #define TAG "socks4"
 
-int send_socks4_response(session_t *session, const uint8_t code) {
+int send_socks4_response(socks_session_t *session, const uint8_t code) {
   LOG_TRACE(TAG, "send socks4 response: %" PRIu8, code);
   assert(session != NULL);
   char data[] = {0, (char)code, 0, 0, 0, 0, 0, 0};
@@ -28,7 +29,7 @@ int send_socks4_response(session_t *session, const uint8_t code) {
   return ret;
 }
 
-int parse_socks4_request(session_t *session) {
+int parse_socks4_request(socks_session_t *session) {
   assert(session != NULL);
   buf_t *buf = &session->read_buf;
   if (buf->size < 8) {
@@ -40,13 +41,7 @@ int parse_socks4_request(session_t *session) {
         session->client_addr);
     return -1;
   }
-  if (buf->base[1] == SOCKS4_CMD_BIND) {
-    LOG_INFO(TAG,
-             "socks4 bind request from client %s rejected: not implemented",
-             session->client_addr);
-    return send_socks4_response(session, SOCKS4_REP_REJECTED_OR_FAILED);
-  }
-  if (buf->base[1] != SOCKS4_CMD_CONNECT) {
+  if (buf->base[1] != SOCKS4_CMD_CONNECT && buf->base[1] != SOCKS4_CMD_BIND) {
     LOG_ERROR(TAG,
               "failed to handle socks4 request from client %s: invalid command",
               session->client_addr);

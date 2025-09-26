@@ -6,6 +6,7 @@
 
 #include "auth.h"
 #include "logging.h"
+#include "socks.h"
 #include "tcp.h"
 #include "util.h"
 
@@ -14,7 +15,8 @@
 #define SOCKS5_METHOD_NO_AUTH 0x00
 #define SOCKS5_METHOD_NO_ACCEPTABLE 0xFF
 
-static int send_socks5_auth_response(session_t *session, const uint8_t code) {
+static int send_socks5_auth_response(socks_session_t *session,
+                                     const uint8_t code) {
   LOG_TRACE(TAG, "send socks5 auth response: %" PRIu8, code);
   assert(session != NULL);
   char data[] = {5, (char)code};
@@ -30,7 +32,7 @@ static int send_socks5_auth_response(session_t *session, const uint8_t code) {
   return ret;
 }
 
-int parse_socks5_auth(session_t *session) {
+int parse_socks5_auth(socks_session_t *session) {
   assert(session != NULL);
   buf_t *buf = &session->read_buf;
   if (buf->size < 2) {

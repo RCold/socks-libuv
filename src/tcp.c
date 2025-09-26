@@ -7,19 +7,24 @@
 #include <uv.h>
 
 #include "logging.h"
+#include "socks.h"
 #include "socks4.h"
 #include "socks5.h"
 #include "tcp.h"
+#include "udp.h"
 #include "util.h"
 
 #define TAG "tcp"
 
-static void session_init(session_t *session, uv_tcp_t *client_handle) {
+static void session_init(socks_session_t *session, socks_server_t *server,
+                         uv_tcp_t *stream) {
   assert(session != NULL);
-  assert(client_handle != NULL);
-  memset(session, 0, sizeof(session_t));
+  assert(server != NULL);
+  assert(stream != NULL);
+  memset(session, 0, sizeof(socks_session_t));
   session->state = STATE_NEW_CONNECTION;
-  session->client_handle = client_handle;
+  session->server = server;
+  session->tcp_client_handle = stream;
   buf_init(&session->read_buf);
 }
 
@@ -30,27 +35,31 @@ static void on_close(uv_handle_t *handle) {
   LOG_TRACE(TAG, "on close return");
 }
 
-static void session_destroy(session_t *session) {
+static void session_destroy(socks_session_t *session) {
   assert(session != NULL);
+  if (session->state == STATE_UDP_ASSOCIATING) {
+    udp_associate_stop(session);
+  }
   if (session->request.domain_name != NULL) {
     LOG_TRACE(TAG, "free domain name: %p", session->request.domain_name);
     free(session->request.domain_name);
     session->request.domain_name = NULL;
   }
-  if (session->remote_handle != NULL) {
-    session->remote_handle->data = NULL;
-    assert(!uv_is_closing((uv_handle_t *)session->remote_handle));
-    uv_read_stop((uv_stream_t *)session->remote_handle);
-    uv_close((uv_handle_t *)session->remote_handle, on_close);
-    session->remote_handle = NULL;
+  session->server = NULL;
+  if (session->tcp_remote_handle != NULL) {
+    session->tcp_remote_handle->data = NULL;
+    assert(!uv_is_closing((uv_handle_t *)session->tcp_remote_handle));
+    uv_read_stop((uv_stream_t *)session->tcp_remote_handle);
+    uv_close((uv_handle_t *)session->tcp_remote_handle, on_close);
+    session->tcp_remote_handle = NULL;
     LOG_DEBUG(TAG, "tcp://%s disconnected", session->remote_addr);
   }
-  if (session->client_handle != NULL) {
-    session->client_handle->data = NULL;
-    assert(!uv_is_closing((uv_handle_t *)session->client_handle));
-    uv_read_stop((uv_stream_t *)session->client_handle);
-    uv_close((uv_handle_t *)session->client_handle, on_close);
-    session->client_handle = NULL;
+  if (session->tcp_client_handle != NULL) {
+    session->tcp_client_handle->data = NULL;
+    assert(!uv_is_closing((uv_handle_t *)session->tcp_client_handle));
+    uv_read_stop((uv_stream_t *)session->tcp_client_handle);
+    uv_close((uv_handle_t *)session->tcp_client_handle, on_close);
+    session->tcp_client_handle = NULL;
     LOG_DEBUG(TAG, "client %s disconnected", session->client_addr);
   }
   if (session->connect_req != NULL) {
@@ -93,7 +102,7 @@ static void on_remote_read(uv_stream_t *stream, const ssize_t nread,
                            const uv_buf_t *buf) {
   LOG_TRACE(TAG, "on remote read: %zd", nread);
   uv_write_t *write_req = NULL;
-  session_t *session = stream->data;
+  socks_session_t *session = stream->data;
   assert(session != NULL);
   if (nread < 0) {
     if (nread != UV_EOF) {
@@ -112,10 +121,10 @@ static void on_remote_read(uv_stream_t *stream, const ssize_t nread,
   }
   write_req->data = buf->base;
   const uv_buf_t bufs[] = {uv_buf_init(buf->base, nread)};
-  assert(!uv_is_closing((uv_handle_t *)session->client_handle));
+  assert(!uv_is_closing((uv_handle_t *)session->tcp_client_handle));
   int err;
-  if ((err = uv_write(write_req, (uv_stream_t *)session->client_handle, bufs, 1,
-                      on_write)) != 0) {
+  if ((err = uv_write(write_req, (uv_stream_t *)session->tcp_client_handle,
+                      bufs, 1, on_write)) != 0) {
     LOG_ERROR(TAG, "on remote read: write failed: %s", uv_strerror(err));
     goto error;
   }
@@ -137,7 +146,7 @@ cleanup:
 
 void on_write_response_accept(uv_write_t *req, const int status) {
   LOG_TRACE(TAG, "on write response accept: %d", status);
-  session_t *session = req->data;
+  socks_session_t *session = req->data;
   if (status != 0) {
     LOG_ERROR(TAG, "on write response accept failed: %s", uv_strerror(status));
     if (session != NULL) {
@@ -161,7 +170,7 @@ void on_write_response_reject(uv_write_t *req, const int status) {
   if (status != 0) {
     LOG_ERROR(TAG, "on write response reject failed: %s", uv_strerror(status));
   }
-  session_t *session = req->data;
+  socks_session_t *session = req->data;
   if (session != NULL) {
     session_destroy(session);
   }
@@ -170,7 +179,7 @@ void on_write_response_reject(uv_write_t *req, const int status) {
   LOG_TRACE(TAG, "on write response reject return");
 }
 
-int send_response_data(session_t *session, const uv_buf_t *buf,
+int send_response_data(socks_session_t *session, const uv_buf_t *buf,
                        const uv_write_cb cb) {
   LOG_TRACE(TAG, "send response data");
   assert(session != NULL);
@@ -184,10 +193,11 @@ int send_response_data(session_t *session, const uv_buf_t *buf,
   session->write_req->data = session;
   memcpy(session->write_buf, buf->base, buf->len);
   const uv_buf_t bufs[] = {uv_buf_init(session->write_buf, buf->len)};
-  assert(!uv_is_closing((uv_handle_t *)session->client_handle));
+  assert(!uv_is_closing((uv_handle_t *)session->tcp_client_handle));
   int err;
-  if ((err = uv_write(session->write_req, (uv_stream_t *)session->client_handle,
-                      bufs, 1, cb)) != 0) {
+  if ((err = uv_write(session->write_req,
+                      (uv_stream_t *)session->tcp_client_handle, bufs, 1,
+                      cb)) != 0) {
     LOG_ERROR(TAG, "send response data: write failed: %s", uv_strerror(err));
     LOG_TRACE(TAG, "free response write req: %p", session->write_req);
     free(session->write_req);
@@ -216,7 +226,7 @@ static void alloc_buf(uv_handle_t *__attribute__((unused)) handle,
 static void on_remote_connect(uv_connect_t *req, const int status) {
   LOG_TRACE(TAG, "on remote connect: %d", status);
   uv_write_t *write_req = NULL;
-  session_t *session = req->data;
+  socks_session_t *session = req->data;
   if (status != 0) {
     LOG_ERROR(TAG, "on remote connect failed: %s", uv_strerror(status));
     if (session != NULL) {
@@ -229,7 +239,7 @@ static void on_remote_connect(uv_connect_t *req, const int status) {
         goto error;
       }
       uv_close((uv_handle_t *)req->handle, on_close);
-      session->remote_handle = NULL;
+      session->tcp_remote_handle = NULL;
       session->connect_req = NULL;
     }
     goto cleanup;
@@ -275,7 +285,7 @@ static void on_remote_connect(uv_connect_t *req, const int status) {
   goto cleanup;
 error:
   uv_close((uv_handle_t *)req->handle, on_close);
-  session->remote_handle = NULL;
+  session->tcp_remote_handle = NULL;
   session_destroy(session);
   if (write_req != NULL) {
     LOG_TRACE(TAG, "free write req: %p", write_req);
@@ -290,7 +300,7 @@ cleanup:
 static void on_addr_resolve(uv_getaddrinfo_t *req, const int status,
                             struct addrinfo *res) {
   LOG_TRACE(TAG, "on addr resolve: %d", status);
-  session_t *session = req->data;
+  socks_session_t *session = req->data;
   if (status != 0) {
     LOG_ERROR(TAG, "addr resolve failed: %s", uv_strerror(status));
     if (session != NULL) {
@@ -302,8 +312,8 @@ static void on_addr_resolve(uv_getaddrinfo_t *req, const int status,
                   0) {
         goto error;
       }
-      uv_close((uv_handle_t *)session->remote_handle, on_close);
-      session->remote_handle = NULL;
+      uv_close((uv_handle_t *)session->tcp_remote_handle, on_close);
+      session->tcp_remote_handle = NULL;
       session->getaddrinfo_req = NULL;
     }
     goto cleanup;
@@ -318,9 +328,9 @@ static void on_addr_resolve(uv_getaddrinfo_t *req, const int status,
     goto error;
   }
   session->connect_req->data = session;
-  assert(!uv_is_closing((uv_handle_t *)session->remote_handle));
+  assert(!uv_is_closing((uv_handle_t *)session->tcp_remote_handle));
   int err;
-  if ((err = uv_tcp_connect(session->connect_req, session->remote_handle,
+  if ((err = uv_tcp_connect(session->connect_req, session->tcp_remote_handle,
                             res->ai_addr, on_remote_connect)) != 0) {
     LOG_ERROR(TAG, "on addr resolve: tcp connect failed: %s", uv_strerror(err));
     LOG_TRACE(TAG, "free connect req: %p", session->connect_req);
@@ -333,14 +343,14 @@ static void on_addr_resolve(uv_getaddrinfo_t *req, const int status,
                 0) {
       goto error;
     }
-    uv_close((uv_handle_t *)session->remote_handle, on_close);
-    session->remote_handle = NULL;
+    uv_close((uv_handle_t *)session->tcp_remote_handle, on_close);
+    session->tcp_remote_handle = NULL;
   }
   session->getaddrinfo_req = NULL;
   goto cleanup;
 error:
-  uv_close((uv_handle_t *)session->remote_handle, on_close);
-  session->remote_handle = NULL;
+  uv_close((uv_handle_t *)session->tcp_remote_handle, on_close);
+  session->tcp_remote_handle = NULL;
   session_destroy(session);
 cleanup:
   LOG_TRACE(TAG, "free getaddrinfo req: %p", req);
@@ -353,7 +363,7 @@ static void on_client_read(uv_stream_t *stream, const ssize_t nread,
                            const uv_buf_t *buf) {
   LOG_TRACE(TAG, "on client read: %zd", nread);
   uv_write_t *write_req = NULL;
-  session_t *session = stream->data;
+  socks_session_t *session = stream->data;
   assert(session != NULL);
   if (nread < 0) {
     if (nread != UV_EOF) {
@@ -399,6 +409,25 @@ static void on_client_read(uv_stream_t *stream, const ssize_t nread,
     if (request_ret == 0) {
       goto cleanup;
     }
+    if (session->request.ver == 4 && session->request.cmd == SOCKS4_CMD_BIND) {
+      LOG_INFO(TAG,
+               "socks4 bind request from client %s rejected: not implemented",
+               session->client_addr);
+      if (send_socks4_response(session, SOCKS4_REP_REJECTED_OR_FAILED) != 0) {
+        goto error;
+      }
+      goto cleanup;
+    }
+    if (session->request.ver == 5 && session->request.cmd == SOCKS5_CMD_BIND) {
+      LOG_INFO(TAG,
+               "socks5 bind request from client %s rejected: not implemented",
+               session->client_addr);
+      if (send_socks5_response(session, SOCKS5_REP_COMMAND_NOT_SUPPORTED,
+                               NULL) != 0) {
+        goto error;
+      }
+      goto cleanup;
+    }
     uint16_t port;
     if (session->request.addr.ss_family == AF_INET) {
       port = ntohs(((struct sockaddr_in *)&session->request.addr)->sin_port);
@@ -438,43 +467,56 @@ static void on_client_read(uv_stream_t *stream, const ssize_t nread,
                  "%s:%" PRIu16, session->request.domain_name, port);
       }
     }
+    if (session->request.ver == 5 &&
+        session->request.cmd == SOCKS5_CMD_UDP_ASSOCIATE) {
+      if (udp_associate_start(session) != 0) {
+        goto error;
+      }
+      session->state = STATE_UDP_ASSOCIATING;
+      goto cleanup;
+    }
+    assert(session->request.ver == 4 &&
+               session->request.cmd == SOCKS4_CMD_CONNECT ||
+           session->request.ver == 5 &&
+               session->request.cmd == SOCKS5_CMD_CONNECT);
     LOG_INFO(TAG, "socks connect request from client %s to tcp://%s accepted",
              session->client_addr, session->remote_addr);
-    session->remote_handle = malloc(sizeof(uv_tcp_t));
-    LOG_TRACE(TAG, "malloc remote handle: %p", session->remote_handle);
-    if (session->remote_handle == NULL) {
+    session->tcp_remote_handle = malloc(sizeof(uv_tcp_t));
+    LOG_TRACE(TAG, "malloc remote handle: %p", session->tcp_remote_handle);
+    if (session->tcp_remote_handle == NULL) {
       LOG_ERROR(TAG, "alloc memory failed");
       goto error;
     }
     int err;
-    if ((err = uv_tcp_init(stream->loop, session->remote_handle)) != 0) {
+    if ((err = uv_tcp_init(stream->loop, session->tcp_remote_handle)) != 0) {
       LOG_ERROR(TAG, "on client read: tcp init failed: %s", uv_strerror(err));
-      LOG_TRACE(TAG, "free remote handle: %p", session->remote_handle);
-      free(session->remote_handle);
-      session->remote_handle = NULL;
+      LOG_TRACE(TAG, "free remote handle: %p", session->tcp_remote_handle);
+      free(session->tcp_remote_handle);
+      session->tcp_remote_handle = NULL;
       goto error;
     }
-    session->remote_handle->data = session;
+    session->tcp_remote_handle->data = session;
     if (session->request.domain_name == NULL) {
       session->connect_req = malloc(sizeof(uv_connect_t));
       LOG_TRACE(TAG, "malloc connect req: %p", session->connect_req);
       if (session->connect_req == NULL) {
         LOG_ERROR(TAG, "alloc memory failed");
-        uv_close((uv_handle_t *)session->remote_handle, on_close);
-        session->remote_handle = NULL;
+        uv_close((uv_handle_t *)session->tcp_remote_handle, on_close);
+        session->tcp_remote_handle = NULL;
         goto error;
       }
       session->connect_req->data = session;
-      if ((err = uv_tcp_connect(session->connect_req, session->remote_handle,
-                                (struct sockaddr *)&session->request.addr,
-                                on_remote_connect)) != 0) {
+      if ((err =
+               uv_tcp_connect(session->connect_req, session->tcp_remote_handle,
+                              (struct sockaddr *)&session->request.addr,
+                              on_remote_connect)) != 0) {
         LOG_ERROR(TAG, "on client read: tcp connect failed: %s",
                   uv_strerror(err));
         LOG_TRACE(TAG, "free connect req: %p", session->connect_req);
         free(session->connect_req);
         session->connect_req = NULL;
-        uv_close((uv_handle_t *)session->remote_handle, on_close);
-        session->remote_handle = NULL;
+        uv_close((uv_handle_t *)session->tcp_remote_handle, on_close);
+        session->tcp_remote_handle = NULL;
         if (session->request.ver == 4 &&
                 send_socks4_response(session, SOCKS4_REP_REJECTED_OR_FAILED) !=
                     0 ||
@@ -490,8 +532,8 @@ static void on_client_read(uv_stream_t *stream, const ssize_t nread,
       LOG_TRACE(TAG, "malloc getaddrinfo req: %p", session->getaddrinfo_req);
       if (session->getaddrinfo_req == NULL) {
         LOG_ERROR(TAG, "alloc memory failed");
-        uv_close((uv_handle_t *)session->remote_handle, on_close);
-        session->remote_handle = NULL;
+        uv_close((uv_handle_t *)session->tcp_remote_handle, on_close);
+        session->tcp_remote_handle = NULL;
         goto error;
       }
       session->getaddrinfo_req->data = session;
@@ -505,8 +547,8 @@ static void on_client_read(uv_stream_t *stream, const ssize_t nread,
         LOG_TRACE(TAG, "free getaddrinfo req: %p", session->getaddrinfo_req);
         free(session->getaddrinfo_req);
         session->getaddrinfo_req = NULL;
-        uv_close((uv_handle_t *)session->remote_handle, on_close);
-        session->remote_handle = NULL;
+        uv_close((uv_handle_t *)session->tcp_remote_handle, on_close);
+        session->tcp_remote_handle = NULL;
         if (session->request.ver == 4 &&
                 send_socks4_response(session, SOCKS4_REP_REJECTED_OR_FAILED) !=
                     0 ||
@@ -541,14 +583,16 @@ static void on_client_read(uv_stream_t *stream, const ssize_t nread,
     }
     write_req->data = buf->base;
     const uv_buf_t bufs[] = {uv_buf_init(buf->base, nread)};
-    assert(!uv_is_closing((uv_handle_t *)session->remote_handle));
-    if ((err = uv_write(write_req, (uv_stream_t *)session->remote_handle, bufs,
-                        1, on_write)) != 0) {
+    assert(!uv_is_closing((uv_handle_t *)session->tcp_remote_handle));
+    if ((err = uv_write(write_req, (uv_stream_t *)session->tcp_remote_handle,
+                        bufs, 1, on_write)) != 0) {
       LOG_ERROR(TAG, "on client read: write failed: %s", uv_strerror(err));
       goto error;
     }
     LOG_TRACE(TAG, "on client read return");
     return;
+  case STATE_UDP_ASSOCIATING:
+    goto cleanup;
   default:
     assert(0);
   }
@@ -584,13 +628,13 @@ void on_new_connection(uv_stream_t *server, const int status) {
     LOG_ERROR(TAG, "on new connection: tcp init failed: %s", uv_strerror(err));
     goto cleanup;
   }
-  stream->data = malloc(sizeof(session_t));
+  stream->data = malloc(sizeof(socks_session_t));
   LOG_TRACE(TAG, "malloc session: %p", stream->data);
   if (stream->data == NULL) {
     LOG_ERROR(TAG, "alloc memory failed");
     goto error;
   }
-  session_init(stream->data, stream);
+  session_init(stream->data, server->data, stream);
   if ((err = uv_accept(server, (uv_stream_t *)stream)) != 0) {
     LOG_ERROR(TAG, "on new connection: accept failed: %s", uv_strerror(err));
     goto error;

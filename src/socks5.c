@@ -7,17 +7,14 @@
 
 #include "auth.h"
 #include "logging.h"
+#include "socks.h"
 #include "socks5.h"
 #include "tcp.h"
 #include "util.h"
 
 #define TAG "socks5"
 
-#define SOCKS5_ADDR_TYPE_IPV4 0x01
-#define SOCKS5_ADDR_TYPE_DOMAIN_NAME 0x03
-#define SOCKS5_ADDR_TYPE_IPV6 0x04
-
-int send_socks5_response(session_t *session, const uint8_t code,
+int send_socks5_response(socks_session_t *session, const uint8_t code,
                          const struct sockaddr *addr) {
   LOG_TRACE(TAG, "send socks5 response: %" PRIu8, code);
   assert(session != NULL);
@@ -56,7 +53,7 @@ int send_socks5_response(session_t *session, const uint8_t code,
   return ret;
 }
 
-int parse_socks5_request(session_t *session) {
+int parse_socks5_request(socks_session_t *session) {
   assert(session != NULL);
   if (session->request.ver != 5) {
     const int auth_ret = parse_socks5_auth(session);
@@ -74,22 +71,8 @@ int parse_socks5_request(session_t *session) {
         session->client_addr);
     return -1;
   }
-  if (buf->base[1] == SOCKS5_CMD_BIND) {
-    LOG_INFO(TAG,
-             "socks5 bind request from client %s rejected: not implemented",
-             session->client_addr);
-    return send_socks5_response(session, SOCKS5_REP_COMMAND_NOT_SUPPORTED,
-                                NULL);
-  }
-  if (buf->base[1] == SOCKS5_CMD_UDP_ASSOCIATE) {
-    LOG_INFO(
-        TAG,
-        "socks5 udp associate request from client %s rejected: not implemented",
-        session->client_addr);
-    return send_socks5_response(session, SOCKS5_REP_COMMAND_NOT_SUPPORTED,
-                                NULL);
-  }
-  if (buf->base[1] != SOCKS5_CMD_CONNECT) {
+  if (buf->base[1] != SOCKS5_CMD_CONNECT && buf->base[1] != SOCKS5_CMD_BIND &&
+      buf->base[1] != SOCKS5_CMD_UDP_ASSOCIATE) {
     LOG_ERROR(TAG,
               "failed to handle socks5 request from client %s: invalid command",
               session->client_addr);
@@ -150,9 +133,9 @@ int parse_socks5_request(session_t *session) {
   default:
     LOG_ERROR(
         TAG,
-        "failed to handle socks5 request from client %s: invalid addr type",
+        "failed to handle socks5 request from client %s: invalid address type",
         session->client_addr);
-    return send_socks5_response(session, SOCKS5_REP_ADDRESS_TYPE_NOT_SUPPRTED,
+    return send_socks5_response(session, SOCKS5_REP_ADDRESS_TYPE_NOT_SUPPORTED,
                                 NULL);
   }
 }

@@ -38,6 +38,7 @@ add_executable(socks-libuv
         src/socks4.c
         src/socks5.c
         src/tcp.c
+        src/udp.c
         src/util.c
 )
 target_link_libraries(socks-libuv PRIVATE PkgConfig::LIBUV)
