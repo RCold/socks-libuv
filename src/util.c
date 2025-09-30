@@ -22,22 +22,9 @@ int getaddrname(const struct sockaddr *addr, char *dst, const size_t size) {
     port = ntohs(((struct sockaddr_in6 *)addr)->sin6_port);
     snprintf(dst, size, "[%s]:%" PRIu16, ip, port);
   } else {
-    LOG_ERROR(TAG, "invalid address family");
+    LOG_ERROR(TAG, "getaddrname: invalid address family");
     return UV_EINVAL;
   }
-  return 0;
-}
-
-int tcp_getpeername(const uv_tcp_t *handle, char *dst, const size_t size) {
-  struct sockaddr_storage name;
-  int namelen = sizeof(name);
-  int err;
-  if ((err = uv_tcp_getpeername(handle, (struct sockaddr *)&name, &namelen)) !=
-      0) {
-    LOG_ERROR(TAG, "get peer name failed: %s", uv_strerror(err));
-    return err;
-  }
-  getaddrname((struct sockaddr *)&name, dst, size);
   return 0;
 }
 
@@ -78,4 +65,147 @@ int buf_consume(buf_t *buf, const size_t len) {
     memmove(buf->base, buf->base + len, buf->size);
   }
   return 0;
+}
+
+static unsigned long int hash_function(const char *str) {
+  unsigned long int hash = 5381;
+  int c;
+  while ((c = *(unsigned char *)str++)) {
+    hash = (hash << 5) + hash + c;
+  }
+  return hash;
+}
+
+int hash_map_init(hash_map_t *map, size_t bucket_count) {
+  if (bucket_count < 16) {
+    bucket_count = 16;
+  }
+  map->buckets = calloc(bucket_count, sizeof(hash_map_entry_t *));
+  LOG_TRACE(TAG, "malloc hash map buckets: %p", map->buckets);
+  if (map->buckets == NULL) {
+    LOG_ERROR(TAG, "alloc memory failed");
+    return -1;
+  }
+  map->bucket_count = bucket_count;
+  map->size = 0;
+  return 0;
+}
+
+int hash_map_put(hash_map_t *map, const char *key, void *value) {
+  if (map == NULL || key == NULL) {
+    return -1;
+  }
+  const unsigned long int hash = hash_function(key);
+  const size_t index = hash % map->bucket_count;
+  hash_map_entry_t *entry = map->buckets[index];
+  while (entry != NULL) {
+    if (strcmp(entry->key, key) == 0) {
+      entry->value = value;
+      return 0;
+    }
+    entry = entry->next;
+  }
+  hash_map_entry_t *new_entry = malloc(sizeof(hash_map_entry_t));
+  LOG_TRACE(TAG, "malloc hash map entry: %p", new_entry);
+  if (new_entry == NULL) {
+    LOG_ERROR(TAG, "alloc memory failed");
+    return -1;
+  }
+  char *key_copy = malloc(strlen(key) + 1);
+  LOG_TRACE(TAG, "malloc hash map key: %p", key_copy);
+  if (key_copy == NULL) {
+    LOG_ERROR(TAG, "alloc memory failed");
+    LOG_TRACE(TAG, "free hash map entry: %p", new_entry);
+    free(new_entry);
+    return -1;
+  }
+  strcpy(key_copy, key);
+  new_entry->key = key_copy;
+  new_entry->value = value;
+  new_entry->next = map->buckets[index];
+  map->buckets[index] = new_entry;
+  map->size++;
+  return 0;
+}
+
+void *hash_map_get(const hash_map_t *map, const char *key) {
+  if (map == NULL || key == NULL) {
+    return NULL;
+  }
+  const unsigned long int hash = hash_function(key);
+  const size_t index = hash % map->bucket_count;
+  const hash_map_entry_t *entry = map->buckets[index];
+  while (entry != NULL) {
+    if (strcmp(entry->key, key) == 0) {
+      return entry->value;
+    }
+    entry = entry->next;
+  }
+  return NULL;
+}
+
+int hash_map_remove(hash_map_t *map, const char *key) {
+  if (map == NULL || key == NULL) {
+    return -1;
+  }
+  const unsigned long int hash = hash_function(key);
+  const size_t index = hash % map->bucket_count;
+  hash_map_entry_t *entry = map->buckets[index];
+  hash_map_entry_t *prev = NULL;
+  while (entry != NULL) {
+    if (strcmp(entry->key, key) == 0) {
+      if (prev == NULL) {
+        map->buckets[index] = entry->next;
+      } else {
+        prev->next = entry->next;
+      }
+      LOG_TRACE(TAG, "free hash map key: %p", entry->key);
+      free((void *)entry->key);
+      LOG_TRACE(TAG, "free hash map entry: %p", entry);
+      free(entry);
+      map->size--;
+      return 0;
+    }
+    prev = entry;
+    entry = entry->next;
+  }
+  return -1;
+}
+
+size_t hash_map_size(const hash_map_t *map) {
+  if (map == NULL) {
+    return 0;
+  }
+  return map->size;
+}
+
+void hash_map_clear(hash_map_t *map, void (*value_destructor)(void *)) {
+  if (map == NULL) {
+    return;
+  }
+  for (size_t i = 0; i < map->bucket_count; i++) {
+    hash_map_entry_t *entry = map->buckets[i];
+    while (entry != NULL) {
+      hash_map_entry_t *next = entry->next;
+      if (value_destructor != NULL && entry->value != NULL) {
+        value_destructor(entry->value);
+      }
+      LOG_TRACE(TAG, "free hash map key: %p", entry->key);
+      free((void *)entry->key);
+      LOG_TRACE(TAG, "free hash map entry: %p", entry);
+      free(entry);
+      entry = next;
+    }
+    map->buckets[i] = NULL;
+  }
+  map->size = 0;
+}
+
+void hash_map_destroy(hash_map_t *map, void (*value_destructor)(void *)) {
+  if (map == NULL) {
+    return;
+  }
+  hash_map_clear(map, value_destructor);
+  LOG_TRACE(TAG, "free hash map buckets: %p", map->buckets);
+  free(map->buckets);
 }

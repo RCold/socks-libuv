@@ -20,12 +20,12 @@ int socks_server_init(socks_server_t *server, uv_loop_t *loop, const char *host,
   assert(port > 0 && port <= 65535);
   server->loop = loop;
   server->handle = NULL;
-  if (uv_ip4_addr(host, port, (struct sockaddr_in *)&server->addr) != 0 &&
-      uv_ip6_addr(host, port, (struct sockaddr_in6 *)&server->addr) != 0) {
+  if (uv_ip4_addr(host, port, (struct sockaddr_in *)&server->sockaddr) != 0 &&
+      uv_ip6_addr(host, port, (struct sockaddr_in6 *)&server->sockaddr) != 0) {
     fprintf(stderr, "error: invalid bind address: %s\n", host);
     return -1;
   }
-  getaddrname((struct sockaddr *)&server->addr, server->local_addr,
+  getaddrname((struct sockaddr *)&server->sockaddr, server->local_addr,
               sizeof(server->local_addr));
   return 0;
 }
@@ -46,7 +46,7 @@ int socks_server_start(socks_server_t *server) {
     return -1;
   }
   server->handle->data = server;
-  if ((err = uv_tcp_bind(server->handle, (struct sockaddr *)&server->addr,
+  if ((err = uv_tcp_bind(server->handle, (struct sockaddr *)&server->sockaddr,
                          0)) != 0 ||
       (err = uv_listen((uv_stream_t *)server->handle, DEFAULT_BACKLOG,
                        on_new_connection)) != 0) {

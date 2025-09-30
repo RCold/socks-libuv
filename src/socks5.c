@@ -14,6 +14,9 @@
 
 #define TAG "socks5"
 
+#define SOCKS5_ERR_INVALID_DOMAIN_NAME (-2)
+#define SOCKS5_ERR_INVALID_ADDRESS_TYPE (-3)
+
 int send_socks5_response(socks_session_t *session, const uint8_t code,
                          const struct sockaddr *addr) {
   LOG_TRACE(TAG, "send socks5 response: %" PRIu8, code);
@@ -27,7 +30,7 @@ int send_socks5_response(socks_session_t *session, const uint8_t code,
     addr_type = SOCKS5_ADDR_TYPE_IPV6;
     len = 22;
   } else {
-    LOG_ERROR(TAG, "invalid address family");
+    LOG_ERROR(TAG, "send socks5 response: invalid address family");
     return -1;
   }
   char data[] = {5, (char)code, 0, addr_type, 0, 0, 0, 0, 0, 0, 0,
@@ -51,6 +54,64 @@ int send_socks5_response(socks_session_t *session, const uint8_t code,
   const int ret = send_response_data(session, &buf, cb);
   LOG_TRACE(TAG, "send socks5 response return %d", ret);
   return ret;
+}
+
+static int parse_socks5_addr(const uv_buf_t *buf, socks_addr_t *addr) {
+  assert(buf != NULL);
+  if (buf->len < 1) {
+    return 0;
+  }
+  const uint8_t addr_type = buf->base[0];
+  switch (addr_type) {
+  case SOCKS5_ADDR_TYPE_IPV4: {
+    if (buf->len < 7) {
+      return 0;
+    }
+    struct sockaddr_in *addr4 = (struct sockaddr_in *)&addr->sockaddr;
+    addr4->sin_family = AF_INET;
+    memcpy(&addr4->sin_addr, buf->base + 1, 4);
+    memcpy(&addr4->sin_port, buf->base + 5, 2);
+    addr->domain_name = NULL;
+    return 7;
+  }
+  case SOCKS5_ADDR_TYPE_DOMAIN_NAME: {
+    if (buf->len < 2) {
+      return 0;
+    }
+    const uint8_t n = buf->base[1];
+    if (n < 1) {
+      return SOCKS5_ERR_INVALID_DOMAIN_NAME;
+    }
+    if (buf->len < 2 + n + 2) {
+      return 0;
+    }
+    addr->domain_name = malloc(n + 1);
+    LOG_TRACE(TAG, "malloc domain name: %p", addr->domain_name);
+    if (addr->domain_name == NULL) {
+      LOG_ERROR(TAG, "alloc memory failed");
+      return -1;
+    }
+    memcpy(addr->domain_name, buf->base + 2, n);
+    addr->domain_name[n] = '\0';
+    struct sockaddr_in *addr4 = (struct sockaddr_in *)&addr->sockaddr;
+    addr4->sin_family = AF_INET;
+    memcpy(&addr4->sin_port, buf->base + 2 + n, 2);
+    return 2 + n + 2;
+  }
+  case SOCKS5_ADDR_TYPE_IPV6: {
+    if (buf->len < 19) {
+      return 0;
+    }
+    struct sockaddr_in6 *addr6 = (struct sockaddr_in6 *)&addr->sockaddr;
+    addr6->sin6_family = AF_INET6;
+    memcpy(&addr6->sin6_addr, buf->base + 1, 16);
+    memcpy(&addr6->sin6_port, buf->base + 17, 2);
+    addr->domain_name = NULL;
+    return 19;
+  }
+  default:
+    return SOCKS5_ERR_INVALID_ADDRESS_TYPE;
+  }
 }
 
 int parse_socks5_request(socks_session_t *session) {
@@ -80,57 +141,23 @@ int parse_socks5_request(socks_session_t *session) {
   }
   session->request.ver = buf->base[0];
   session->request.cmd = buf->base[1];
-  const uint8_t addr_type = buf->base[3];
-  struct sockaddr_in *addr = (struct sockaddr_in *)&session->request.addr;
-  struct sockaddr_in6 *addr6 = (struct sockaddr_in6 *)&session->request.addr;
-  uint8_t n;
-  switch (addr_type) {
-  case SOCKS5_ADDR_TYPE_IPV4:
-    if (buf->size < 10) {
-      return 0;
-    }
-    addr->sin_family = AF_INET;
-    memcpy(&addr->sin_addr, buf->base + 4, 4);
-    memcpy(&addr->sin_port, buf->base + 8, 2);
-    buf_consume(buf, 10);
-    return 10;
-  case SOCKS5_ADDR_TYPE_DOMAIN_NAME:
-    if (buf->size < 5) {
-      return 0;
-    }
-    n = buf->base[4];
-    if (n < 1) {
-      LOG_ERROR(
-          TAG,
-          "failed to handle socks5 request from client %s: invalid domain name",
-          session->client_addr);
-      return -1;
-    }
-    if (buf->size < 5 + n + 2) {
-      return 0;
-    }
-    session->request.domain_name = malloc(n + 1);
-    LOG_TRACE(TAG, "malloc domain name: %p", session->request.domain_name);
-    if (session->request.domain_name == NULL) {
-      LOG_ERROR(TAG, "alloc memory failed");
-      return -1;
-    }
-    memcpy(session->request.domain_name, buf->base + 5, n);
-    session->request.domain_name[n] = '\0';
-    addr->sin_family = AF_INET;
-    memcpy(&addr->sin_port, buf->base + 5 + n, 2);
-    buf_consume(buf, 5 + n + 2);
-    return 5 + n + 2;
-  case SOCKS5_ADDR_TYPE_IPV6:
-    if (buf->size < 22) {
-      return 0;
-    }
-    addr6->sin6_family = AF_INET6;
-    memcpy(&addr6->sin6_addr, buf->base + 4, 16);
-    memcpy(&addr6->sin6_port, buf->base + 20, 2);
-    buf_consume(buf, 22);
-    return 22;
-  default:
+  const uv_buf_t addr_buf = uv_buf_init(buf->base + 3, buf->size - 3);
+  const int ret = parse_socks5_addr(&addr_buf, &session->request.addr);
+  if (ret > 0) {
+    buf_consume(buf, 3 + ret);
+    return 3 + ret;
+  }
+  if (ret == 0) {
+    return 0;
+  }
+  if (ret == SOCKS5_ERR_INVALID_DOMAIN_NAME) {
+    LOG_ERROR(
+        TAG,
+        "failed to handle socks5 request from client %s: invalid domain name",
+        session->client_addr);
+    return -1;
+  }
+  if (ret == SOCKS5_ERR_INVALID_ADDRESS_TYPE) {
     LOG_ERROR(
         TAG,
         "failed to handle socks5 request from client %s: invalid address type",
@@ -138,4 +165,62 @@ int parse_socks5_request(socks_session_t *session) {
     return send_socks5_response(session, SOCKS5_REP_ADDRESS_TYPE_NOT_SUPPORTED,
                                 NULL);
   }
+  return -1;
+}
+
+int parse_socks5_udp_header(const uv_buf_t *buf, socks_udp_header_t *header,
+                            const char *client_addr) {
+  assert(buf != NULL);
+  if (buf->len < 4) {
+    return -1;
+  }
+  if (buf->base[2] != 0) {
+    LOG_ERROR(TAG,
+              "failed to handle udp packet from client %s: fragmentation not "
+              "supported",
+              client_addr);
+    return -1;
+  }
+  header->frag = buf->base[2];
+  const uv_buf_t addr_buf = uv_buf_init(buf->base + 3, buf->len - 3);
+  const int ret = parse_socks5_addr(&addr_buf, &header->addr);
+  if (ret > 0) {
+    return 3 + ret;
+  }
+  if (ret == SOCKS5_ERR_INVALID_DOMAIN_NAME) {
+    LOG_ERROR(TAG,
+              "failed to handle udp packet from client %s: invalid domain name",
+              client_addr);
+  } else if (ret == SOCKS5_ERR_INVALID_ADDRESS_TYPE) {
+    LOG_ERROR(
+        TAG, "failed to handle udp packet from client %s: invalid address type",
+        client_addr);
+  }
+  return -1;
+}
+
+int build_socks5_udp_header(const uv_buf_t *buf, const struct sockaddr *addr) {
+  if (addr->sa_family == AF_INET) {
+    if (buf->len < 10) {
+      return -1;
+    }
+    buf->base[0] = buf->base[1] = buf->base[2] = 0;
+    buf->base[3] = SOCKS5_ADDR_TYPE_IPV4;
+    const struct sockaddr_in *addr4 = (struct sockaddr_in *)addr;
+    memcpy(buf->base + 4, &addr4->sin_addr, 4);
+    memcpy(buf->base + 8, &addr4->sin_port, 2);
+    return 10;
+  }
+  if (addr->sa_family == AF_INET6) {
+    if (buf->len < 22) {
+      return -1;
+    }
+    buf->base[0] = buf->base[1] = buf->base[2] = 0;
+    buf->base[3] = SOCKS5_ADDR_TYPE_IPV6;
+    const struct sockaddr_in6 *addr6 = (struct sockaddr_in6 *)addr;
+    memcpy(buf->base + 4, &addr6->sin6_addr, 16);
+    memcpy(buf->base + 20, &addr6->sin6_port, 2);
+    return 22;
+  }
+  return -1;
 }

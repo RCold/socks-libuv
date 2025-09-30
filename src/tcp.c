@@ -40,10 +40,10 @@ static void session_destroy(socks_session_t *session) {
   if (session->state == STATE_UDP_ASSOCIATING) {
     udp_associate_stop(session);
   }
-  if (session->request.domain_name != NULL) {
-    LOG_TRACE(TAG, "free domain name: %p", session->request.domain_name);
-    free(session->request.domain_name);
-    session->request.domain_name = NULL;
+  if (session->request.addr.domain_name != NULL) {
+    LOG_TRACE(TAG, "free domain name: %p", session->request.addr.domain_name);
+    free(session->request.addr.domain_name);
+    session->request.addr.domain_name = NULL;
   }
   session->server = NULL;
   if (session->tcp_remote_handle != NULL) {
@@ -181,14 +181,13 @@ void on_write_response_reject(uv_write_t *req, const int status) {
 
 int send_response_data(socks_session_t *session, const uv_buf_t *buf,
                        const uv_write_cb cb) {
-  LOG_TRACE(TAG, "send response data");
   assert(session != NULL);
   assert(buf->len <= WRITE_BUF_SIZE);
   session->write_req = malloc(sizeof(uv_write_t));
   LOG_TRACE(TAG, "malloc response write req: %p", session->write_req);
   if (session->write_req == NULL) {
     LOG_ERROR(TAG, "alloc memory failed");
-    goto error;
+    return -1;
   }
   session->write_req->data = session;
   memcpy(session->write_buf, buf->base, buf->len);
@@ -202,13 +201,9 @@ int send_response_data(socks_session_t *session, const uv_buf_t *buf,
     LOG_TRACE(TAG, "free response write req: %p", session->write_req);
     free(session->write_req);
     session->write_req = NULL;
-    goto error;
+    return -1;
   }
-  LOG_TRACE(TAG, "send response data return 0");
   return 0;
-error:
-  LOG_TRACE(TAG, "send response data return -1");
-  return -1;
 }
 
 static void alloc_buf(uv_handle_t *__attribute__((unused)) handle,
@@ -302,7 +297,7 @@ static void on_addr_resolve(uv_getaddrinfo_t *req, const int status,
   LOG_TRACE(TAG, "on addr resolve: %d", status);
   socks_session_t *session = req->data;
   if (status != 0) {
-    LOG_ERROR(TAG, "addr resolve failed: %s", uv_strerror(status));
+    LOG_ERROR(TAG, "on addr resolve failed: %s", uv_strerror(status));
     if (session != NULL) {
       if (session->request.ver == 4 &&
               send_socks4_response(session, SOCKS4_REP_REJECTED_OR_FAILED) !=
@@ -375,9 +370,18 @@ static void on_client_read(uv_stream_t *stream, const ssize_t nread,
     goto cleanup;
   }
   switch (session->state) {
-  case STATE_NEW_CONNECTION:
-    tcp_getpeername((uv_tcp_t *)stream, session->client_addr,
-                    sizeof(session->client_addr));
+  case STATE_NEW_CONNECTION: {
+    int namelen = sizeof(session->client_sockaddr);
+    int err;
+    if ((err = uv_tcp_getpeername((uv_tcp_t *)stream,
+                                  (struct sockaddr *)&session->client_sockaddr,
+                                  &namelen)) != 0) {
+      LOG_ERROR(TAG, "on client read: tcp getpeername failed: %s",
+                uv_strerror(err));
+      goto error;
+    }
+    getaddrname((struct sockaddr *)&session->client_sockaddr,
+                session->client_addr, sizeof(session->client_addr));
     LOG_DEBUG(TAG, "client %s connected", session->client_addr);
     if (buf->base[0] == 4) {
       LOG_DEBUG(TAG, "handle socks4 request from client %s",
@@ -387,7 +391,8 @@ static void on_client_read(uv_stream_t *stream, const ssize_t nread,
                 session->client_addr);
     }
     session->state = STATE_READING_REQUEST;
-  case STATE_READING_REQUEST:
+  }
+  case STATE_READING_REQUEST: {
     if (buf_append(&session->read_buf, buf->base, nread) != 0) {
       goto error;
     }
@@ -429,42 +434,45 @@ static void on_client_read(uv_stream_t *stream, const ssize_t nread,
       goto cleanup;
     }
     uint16_t port;
-    if (session->request.addr.ss_family == AF_INET) {
-      port = ntohs(((struct sockaddr_in *)&session->request.addr)->sin_port);
-    } else if (session->request.addr.ss_family == AF_INET6) {
-      port = ntohs(((struct sockaddr_in6 *)&session->request.addr)->sin6_port);
+    if (session->request.addr.sockaddr.ss_family == AF_INET) {
+      port = ntohs(
+          ((struct sockaddr_in *)&session->request.addr.sockaddr)->sin_port);
+    } else if (session->request.addr.sockaddr.ss_family == AF_INET6) {
+      port = ntohs(
+          ((struct sockaddr_in6 *)&session->request.addr.sockaddr)->sin6_port);
     } else {
-      LOG_ERROR(TAG, "invalid address family");
+      LOG_ERROR(TAG, "on client read: invalid address family");
       goto error;
     }
-    if (session->request.domain_name == NULL) {
-      if (session->request.addr.ss_family == AF_INET) {
+    if (session->request.addr.domain_name == NULL) {
+      if (session->request.addr.sockaddr.ss_family == AF_INET) {
         char ip4[INET_ADDRSTRLEN];
-        uv_ip4_name((struct sockaddr_in *)&session->request.addr, ip4,
+        uv_ip4_name((struct sockaddr_in *)&session->request.addr.sockaddr, ip4,
                     sizeof(ip4));
         snprintf(session->remote_addr, sizeof(session->remote_addr),
                  "%s:%" PRIu16, ip4, port);
-      } else if (session->request.addr.ss_family == AF_INET6) {
+      } else if (session->request.addr.sockaddr.ss_family == AF_INET6) {
         char ip6[INET6_ADDRSTRLEN];
-        uv_ip6_name((struct sockaddr_in6 *)&session->request.addr, ip6,
+        uv_ip6_name((struct sockaddr_in6 *)&session->request.addr.sockaddr, ip6,
                     sizeof(ip6));
         snprintf(session->remote_addr, sizeof(session->remote_addr),
                  "[%s]:%" PRIu16, ip6, port);
       }
     } else {
       struct sockaddr_in6 addr6;
-      if (uv_ip6_addr(session->request.domain_name, port, &addr6) == 0) {
-        memcpy(&session->request.addr, &addr6, sizeof(addr6));
-        LOG_TRACE(TAG, "free domain name: %p", session->request.domain_name);
-        free(session->request.domain_name);
-        session->request.domain_name = NULL;
+      if (uv_ip6_addr(session->request.addr.domain_name, port, &addr6) == 0) {
+        memcpy(&session->request.addr.sockaddr, &addr6, sizeof(addr6));
+        LOG_TRACE(TAG, "free domain name: %p",
+                  session->request.addr.domain_name);
+        free(session->request.addr.domain_name);
+        session->request.addr.domain_name = NULL;
         char ip[INET6_ADDRSTRLEN];
         uv_ip6_name(&addr6, ip, sizeof(ip));
         snprintf(session->remote_addr, sizeof(session->remote_addr),
                  "[%s]:%" PRIu16, ip, port);
       } else {
         snprintf(session->remote_addr, sizeof(session->remote_addr),
-                 "%s:%" PRIu16, session->request.domain_name, port);
+                 "%s:%" PRIu16, session->request.addr.domain_name, port);
       }
     }
     if (session->request.ver == 5 &&
@@ -496,7 +504,7 @@ static void on_client_read(uv_stream_t *stream, const ssize_t nread,
       goto error;
     }
     session->tcp_remote_handle->data = session;
-    if (session->request.domain_name == NULL) {
+    if (session->request.addr.domain_name == NULL) {
       session->connect_req = malloc(sizeof(uv_connect_t));
       LOG_TRACE(TAG, "malloc connect req: %p", session->connect_req);
       if (session->connect_req == NULL) {
@@ -506,10 +514,10 @@ static void on_client_read(uv_stream_t *stream, const ssize_t nread,
         goto error;
       }
       session->connect_req->data = session;
-      if ((err =
-               uv_tcp_connect(session->connect_req, session->tcp_remote_handle,
-                              (struct sockaddr *)&session->request.addr,
-                              on_remote_connect)) != 0) {
+      if ((err = uv_tcp_connect(
+               session->connect_req, session->tcp_remote_handle,
+               (struct sockaddr *)&session->request.addr.sockaddr,
+               on_remote_connect)) != 0) {
         LOG_ERROR(TAG, "on client read: tcp connect failed: %s",
                   uv_strerror(err));
         LOG_TRACE(TAG, "free connect req: %p", session->connect_req);
@@ -539,9 +547,9 @@ static void on_client_read(uv_stream_t *stream, const ssize_t nread,
       session->getaddrinfo_req->data = session;
       char service[MAX_PORT_LEN + 1];
       snprintf(service, sizeof(service), "%" PRIu16, port);
-      if ((err = uv_getaddrinfo(stream->loop, session->getaddrinfo_req,
-                                on_addr_resolve, session->request.domain_name,
-                                service, NULL)) != 0) {
+      if ((err = uv_getaddrinfo(
+               stream->loop, session->getaddrinfo_req, on_addr_resolve,
+               session->request.addr.domain_name, service, NULL)) != 0) {
         LOG_ERROR(TAG, "on client read: getaddrinfo failed: %s",
                   uv_strerror(err));
         LOG_TRACE(TAG, "free getaddrinfo req: %p", session->getaddrinfo_req);
@@ -562,7 +570,8 @@ static void on_client_read(uv_stream_t *stream, const ssize_t nread,
     }
     session->state = STATE_CONNECTING;
     goto cleanup;
-  case STATE_CONNECTING:
+  }
+  case STATE_CONNECTING: {
     if (session->read_buf.size + nread > 16 * 1024) {
       LOG_ERROR(
           TAG,
@@ -574,7 +583,8 @@ static void on_client_read(uv_stream_t *stream, const ssize_t nread,
       goto error;
     }
     goto cleanup;
-  case STATE_RELAYING:
+  }
+  case STATE_RELAYING: {
     write_req = malloc(sizeof(uv_write_t));
     LOG_TRACE(TAG, "malloc write req: %p", write_req);
     if (write_req == NULL) {
@@ -584,6 +594,7 @@ static void on_client_read(uv_stream_t *stream, const ssize_t nread,
     write_req->data = buf->base;
     const uv_buf_t bufs[] = {uv_buf_init(buf->base, nread)};
     assert(!uv_is_closing((uv_handle_t *)session->tcp_remote_handle));
+    int err;
     if ((err = uv_write(write_req, (uv_stream_t *)session->tcp_remote_handle,
                         bufs, 1, on_write)) != 0) {
       LOG_ERROR(TAG, "on client read: write failed: %s", uv_strerror(err));
@@ -591,6 +602,7 @@ static void on_client_read(uv_stream_t *stream, const ssize_t nread,
     }
     LOG_TRACE(TAG, "on client read return");
     return;
+  }
   case STATE_UDP_ASSOCIATING:
     goto cleanup;
   default:

@@ -49,7 +49,8 @@ int parse_socks4_request(socks_session_t *session) {
   }
   session->request.ver = buf->base[0];
   session->request.cmd = buf->base[1];
-  struct sockaddr_in *addr = (struct sockaddr_in *)&session->request.addr;
+  struct sockaddr_in *addr =
+      (struct sockaddr_in *)&session->request.addr.sockaddr;
   addr->sin_family = AF_INET;
   memcpy(&addr->sin_port, buf->base + 2, 2);
   memcpy(&addr->sin_addr, buf->base + 4, 4);
@@ -71,7 +72,7 @@ int parse_socks4_request(socks_session_t *session) {
   if (user_id_end == -1) {
     return 0;
   }
-  const u_long ip = ntohl(addr->sin_addr.s_addr);
+  const uint32_t ip = ntohl(addr->sin_addr.s_addr);
   if (ip >> 8 == 0 && (ip & 0xFF) != 0) {
     const int domain_start = user_id_end;
     int domain_end = -1;
@@ -98,13 +99,13 @@ int parse_socks4_request(socks_session_t *session) {
           session->client_addr);
       return -1;
     }
-    session->request.domain_name = malloc(domain_end - domain_start);
-    LOG_TRACE(TAG, "malloc domain name: %p", session->request.domain_name);
-    if (session->request.domain_name == NULL) {
+    session->request.addr.domain_name = malloc(domain_end - domain_start);
+    LOG_TRACE(TAG, "malloc domain name: %p", session->request.addr.domain_name);
+    if (session->request.addr.domain_name == NULL) {
       LOG_ERROR(TAG, "alloc memory failed");
       return -1;
     }
-    memcpy(session->request.domain_name, buf->base + domain_start,
+    memcpy(session->request.addr.domain_name, buf->base + domain_start,
            domain_end - domain_start);
     buf_consume(buf, domain_end);
     return domain_end;
