@@ -16,18 +16,6 @@
 
 #define TAG "tcp"
 
-static void session_init(socks_session_t *session, socks_server_t *server,
-                         uv_tcp_t *stream) {
-  assert(session != NULL);
-  assert(server != NULL);
-  assert(stream != NULL);
-  memset(session, 0, sizeof(socks_session_t));
-  session->state = STATE_NEW_CONNECTION;
-  session->server = server;
-  session->tcp_client_handle = stream;
-  buf_init(&session->read_buf);
-}
-
 static void on_close(uv_handle_t *handle) {
   LOG_TRACE(TAG, "on close");
   LOG_TRACE(TAG, "free handle: %p", handle);
@@ -371,18 +359,6 @@ static void on_client_read(uv_stream_t *stream, const ssize_t nread,
   }
   switch (session->state) {
   case STATE_NEW_CONNECTION: {
-    int namelen = sizeof(session->client_sockaddr);
-    int err;
-    if ((err = uv_tcp_getpeername((uv_tcp_t *)stream,
-                                  (struct sockaddr *)&session->client_sockaddr,
-                                  &namelen)) != 0) {
-      LOG_ERROR(TAG, "on client read: tcp getpeername failed: %s",
-                uv_strerror(err));
-      goto error;
-    }
-    getaddrname((struct sockaddr *)&session->client_sockaddr,
-                session->client_addr, sizeof(session->client_addr));
-    LOG_DEBUG(TAG, "client %s connected", session->client_addr);
     if (buf->base[0] == 4) {
       LOG_DEBUG(TAG, "handle socks4 request from client %s",
                 session->client_addr);
@@ -640,18 +616,35 @@ void on_new_connection(uv_stream_t *server, const int status) {
     LOG_ERROR(TAG, "on new connection: tcp init failed: %s", uv_strerror(err));
     goto cleanup;
   }
-  stream->data = malloc(sizeof(socks_session_t));
-  LOG_TRACE(TAG, "malloc session: %p", stream->data);
-  if (stream->data == NULL) {
+  socks_session_t *session = malloc(sizeof(socks_session_t));
+  LOG_TRACE(TAG, "malloc session: %p", session);
+  if (session == NULL) {
     LOG_ERROR(TAG, "alloc memory failed");
     goto error;
   }
-  session_init(stream->data, server->data, stream);
+  memset(session, 0, sizeof(socks_session_t));
+  session->state = STATE_NEW_CONNECTION;
+  assert(server->data != NULL);
+  session->server = server->data;
+  session->tcp_client_handle = stream;
+  buf_init(&session->read_buf);
   if ((err = uv_accept(server, (uv_stream_t *)stream)) != 0) {
     LOG_ERROR(TAG, "on new connection: accept failed: %s", uv_strerror(err));
     goto error;
   }
+  int namelen = sizeof(session->client_sockaddr);
+  if ((err = uv_tcp_getpeername((uv_tcp_t *)stream,
+                                (struct sockaddr *)&session->client_sockaddr,
+                                &namelen)) != 0) {
+    LOG_ERROR(TAG, "on new connection: tcp getpeername failed: %s",
+              uv_strerror(err));
+    goto error;
+  }
+  getaddrname((struct sockaddr *)&session->client_sockaddr,
+              session->client_addr, sizeof(session->client_addr));
+  LOG_DEBUG(TAG, "client %s connected", session->client_addr);
   uv_tcp_nodelay(stream, 1);
+  stream->data = session;
   if ((err = uv_read_start((uv_stream_t *)stream, alloc_buf, on_client_read)) !=
       0) {
     LOG_ERROR(TAG, "on new connection: read start failed: %s",
@@ -661,19 +654,15 @@ void on_new_connection(uv_stream_t *server, const int status) {
   LOG_TRACE(TAG, "on new connection return");
   return;
 error:
-  if (stream->data != NULL) {
-    LOG_TRACE(TAG, "free session: %p", stream->data);
-    free(stream->data);
+  if (session != NULL) {
+    LOG_TRACE(TAG, "free session: %p", session);
+    free(session);
   }
   uv_close((uv_handle_t *)stream, on_close);
   LOG_TRACE(TAG, "on new connection return");
   return;
 cleanup:
   if (stream != NULL) {
-    if (stream->data != NULL) {
-      LOG_TRACE(TAG, "free session: %p", stream->data);
-      free(stream->data);
-    }
     LOG_TRACE(TAG, "free client handle: %p", stream);
     free(stream);
   }
