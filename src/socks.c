@@ -1,3 +1,8 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/*
+ * Copyright (C) 2025 Yeuham Wang <rcold@rcold.name>
+ */
+
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
