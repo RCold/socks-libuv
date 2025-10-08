@@ -208,4 +208,6 @@ void hash_map_destroy(hash_map_t *map, void (*value_destructor)(void *)) {
   hash_map_clear(map, value_destructor);
   LOG_TRACE(TAG, "free hash map buckets: %p", map->buckets);
   free(map->buckets);
+  map->buckets = NULL;
+  map->bucket_count = 0;
 }

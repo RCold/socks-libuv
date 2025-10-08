@@ -25,7 +25,7 @@ A minimal SOCKS server implemented based on [libuv](https://github.com/libuv/lib
 
 - Windows
 
-1. Install MSYS2: https://www.msys2.org/
+1. Install MSYS2: <https://www.msys2.org/>
 2. Open "MSYS2 MINGW64" shell
 3. Install dependencies:
 
@@ -46,7 +46,7 @@ sudo yum install cmake gcc libuv-devel pkgconfig
 
 - macOS
 
-1. Install Homebrew: https://brew.sh/
+1. Install Homebrew: <https://brew.sh/>
 2. Install dependencies:
 
 ```bash
@@ -68,8 +68,11 @@ C_LOG=debug ./build/socks-libuv --bind 127.0.0.1 1080
 
 ## Important Notes
 
-This SOCKS server does not implement any authentication methods. Anyone connecting to this server has unrestricted access to your network. You should only use this server within a trusted private network (home LAN, VPN, etc.) or behind a firewall.
+This SOCKS server does not implement any authentication methods. Anyone
+connecting to this server has unrestricted access to your network. You should
+only use this server within a trusted private network (home LAN, VPN, etc.) or
+behind a firewall.
 
 ## License
 
-Licensed under Apache License Version 2.0 ([LICENSE](LICENSE) or https://www.apache.org/licenses/LICENSE-2.0)
+Licensed under Apache License Version 2.0 ([LICENSE](LICENSE) or <https://www.apache.org/licenses/LICENSE-2.0>)

@@ -1,7 +1,6 @@
 #include <assert.h>
 #include <inttypes.h>
 #include <stdint.h>
-#include <stdlib.h>
 #include <string.h>
 #include <uv.h>
 
@@ -54,42 +53,42 @@ int parse_socks4_request(socks_session_t *session) {
   addr->sin_family = AF_INET;
   memcpy(&addr->sin_port, buf->base + 2, 2);
   memcpy(&addr->sin_addr, buf->base + 4, 4);
-  const int user_id_start = 8;
-  int user_id_end = -1;
-  for (int i = user_id_start; i < buf->size; i++) {
-    if (i > MAX_USER_ID_LEN) {
+  const char *user_id_start = buf->base + 8;
+  const char *user_id_end = NULL;
+  for (const char *p = user_id_start; p < buf->base + buf->size; p++) {
+    if (p - user_id_start > MAX_USER_ID_LEN) {
       LOG_ERROR(TAG,
                 "failed to handle socks4 request from client %s: user id is "
                 "too large",
                 session->client_addr);
       return -1;
     }
-    if (buf->base[i] == '\0') {
-      user_id_end = i + 1;
+    if (*p == '\0') {
+      user_id_end = p + 1;
       break;
     }
   }
-  if (user_id_end == -1) {
+  if (user_id_end == NULL) {
     return 0;
   }
   const uint32_t ip = ntohl(addr->sin_addr.s_addr);
   if (ip >> 8 == 0 && (ip & 0xFF) != 0) {
-    const int domain_start = user_id_end;
-    int domain_end = -1;
-    for (int i = domain_start; i < buf->size; i++) {
-      if (i > MAX_DOMAIN_NAME_LEN) {
+    const char *domain_start = user_id_end;
+    const char *domain_end = NULL;
+    for (const char *p = domain_start; p < buf->base + buf->size; p++) {
+      if (p - domain_start > MAX_DOMAIN_NAME_LEN) {
         LOG_ERROR(TAG,
                   "failed to handle socks4 request from client %s: domain name "
                   "is too large",
                   session->client_addr);
         return -1;
       }
-      if (buf->base[i] == '\0') {
-        domain_end = i + 1;
+      if (*p == '\0') {
+        domain_end = p + 1;
         break;
       }
     }
-    if (domain_end == -1) {
+    if (domain_end == NULL) {
       return 0;
     }
     if (domain_end - domain_start < 2) {
@@ -99,17 +98,12 @@ int parse_socks4_request(socks_session_t *session) {
           session->client_addr);
       return -1;
     }
-    session->request.addr.domain_name = malloc(domain_end - domain_start);
-    LOG_TRACE(TAG, "malloc domain name: %p", session->request.addr.domain_name);
-    if (session->request.addr.domain_name == NULL) {
-      LOG_ERROR(TAG, "alloc memory failed");
-      return -1;
-    }
-    memcpy(session->request.addr.domain_name, buf->base + domain_start,
+    assert(domain_end - domain_start <= MAX_DOMAIN_NAME_LEN + 1);
+    memcpy(session->request.addr.domain_name, domain_start,
            domain_end - domain_start);
-    buf_consume(buf, domain_end);
-    return domain_end;
+    buf_consume(buf, domain_end - buf->base);
+    return (int)(domain_end - buf->base);
   }
-  buf_consume(buf, user_id_end);
-  return user_id_end;
+  buf_consume(buf, user_id_end - buf->base);
+  return (int)(user_id_end - buf->base);
 }

@@ -21,7 +21,7 @@ typedef struct {
 
 typedef struct {
   struct sockaddr_storage sockaddr;
-  char *domain_name;
+  char domain_name[MAX_DOMAIN_NAME_LEN + 1];
 } socks_addr_t;
 
 typedef struct {
@@ -48,7 +48,7 @@ typedef struct {
   uv_connect_t *connect_req;
   uv_getaddrinfo_t *getaddrinfo_req;
   uv_write_t *write_req;
-  hash_map_t *udp_sessions;
+  hash_map_t udp_sessions;
   struct sockaddr_storage client_sockaddr;
   char client_addr[INET6_ADDRSTRLEN + 3 + MAX_PORT_LEN + 1];
   char remote_addr[MAX_DOMAIN_NAME_LEN + 1 + MAX_PORT_LEN + 1];

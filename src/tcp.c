@@ -28,11 +28,6 @@ static void session_destroy(socks_session_t *session) {
   if (session->state == STATE_UDP_ASSOCIATING) {
     udp_associate_stop(session);
   }
-  if (session->request.addr.domain_name != NULL) {
-    LOG_TRACE(TAG, "free domain name: %p", session->request.addr.domain_name);
-    free(session->request.addr.domain_name);
-    session->request.addr.domain_name = NULL;
-  }
   session->server = NULL;
   if (session->tcp_remote_handle != NULL) {
     session->tcp_remote_handle->data = NULL;
@@ -420,7 +415,7 @@ static void on_client_read(uv_stream_t *stream, const ssize_t nread,
       LOG_ERROR(TAG, "on client read: invalid address family");
       goto error;
     }
-    if (session->request.addr.domain_name == NULL) {
+    if (session->request.addr.domain_name[0] == '\0') {
       if (session->request.addr.sockaddr.ss_family == AF_INET) {
         char ip4[INET_ADDRSTRLEN];
         uv_ip4_name((struct sockaddr_in *)&session->request.addr.sockaddr, ip4,
@@ -438,10 +433,7 @@ static void on_client_read(uv_stream_t *stream, const ssize_t nread,
       struct sockaddr_in6 addr6;
       if (uv_ip6_addr(session->request.addr.domain_name, port, &addr6) == 0) {
         memcpy(&session->request.addr.sockaddr, &addr6, sizeof(addr6));
-        LOG_TRACE(TAG, "free domain name: %p",
-                  session->request.addr.domain_name);
-        free(session->request.addr.domain_name);
-        session->request.addr.domain_name = NULL;
+        session->request.addr.domain_name[0] = '\0';
         char ip[INET6_ADDRSTRLEN];
         uv_ip6_name(&addr6, ip, sizeof(ip));
         snprintf(session->remote_addr, sizeof(session->remote_addr),
@@ -480,7 +472,7 @@ static void on_client_read(uv_stream_t *stream, const ssize_t nread,
       goto error;
     }
     session->tcp_remote_handle->data = session;
-    if (session->request.addr.domain_name == NULL) {
+    if (session->request.addr.domain_name[0] == '\0') {
       session->connect_req = malloc(sizeof(uv_connect_t));
       LOG_TRACE(TAG, "malloc connect req: %p", session->connect_req);
       if (session->connect_req == NULL) {
@@ -633,7 +625,7 @@ void on_new_connection(uv_stream_t *server, const int status) {
     goto error;
   }
   int namelen = sizeof(session->client_sockaddr);
-  if ((err = uv_tcp_getpeername((uv_tcp_t *)stream,
+  if ((err = uv_tcp_getpeername(stream,
                                 (struct sockaddr *)&session->client_sockaddr,
                                 &namelen)) != 0) {
     LOG_ERROR(TAG, "on new connection: tcp getpeername failed: %s",

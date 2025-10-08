@@ -134,7 +134,7 @@ static void on_client_udp_recv(uv_udp_t *handle, const ssize_t nread,
   }
   char client_addr[INET6_ADDRSTRLEN + 3 + MAX_PORT_LEN + 1];
   getaddrname(addr, client_addr, sizeof(client_addr));
-  const socks_session_t *session = handle->data;
+  socks_session_t *session = handle->data;
   assert(session != NULL);
   if (addr->sa_family != session->client_sockaddr.ss_family ||
       addr->sa_family == AF_INET &&
@@ -158,18 +158,16 @@ static void on_client_udp_recv(uv_udp_t *handle, const ssize_t nread,
   if (header_len <= 0) {
     goto cleanup;
   }
-  if (header.addr.domain_name != NULL) {
+  if (header.addr.domain_name[0] != '\0') {
     LOG_ERROR(
         TAG,
         "failed to handle udp packet from client %s: domain name not supported",
         client_addr);
-    LOG_TRACE(TAG, "free domain name: %p", header.addr.domain_name);
-    free(header.addr.domain_name);
     goto cleanup;
   }
-  assert(session->udp_sessions != NULL);
+  assert(session->udp_sessions.buckets != NULL);
   socks_udp_session_t *udp_session =
-      hash_map_get(session->udp_sessions, client_addr);
+      hash_map_get(&session->udp_sessions, client_addr);
   if (udp_session == NULL) {
     udp_session = malloc(sizeof(socks_udp_session_t));
     LOG_TRACE(TAG, "malloc udp session: %p", udp_session);
@@ -251,7 +249,7 @@ static void on_client_udp_recv(uv_udp_t *handle, const ssize_t nread,
       uv_udp_recv_stop(udp_session->udp4_remote_handle);
       goto error;
     }
-    if (hash_map_put(session->udp_sessions, client_addr, udp_session) != 0) {
+    if (hash_map_put(&session->udp_sessions, client_addr, udp_session) != 0) {
       LOG_ERROR(TAG, "on client udp recv: hash map put failed");
       uv_udp_recv_stop(udp_session->udp4_remote_handle);
       uv_udp_recv_stop(udp_session->udp6_remote_handle);
@@ -334,18 +332,8 @@ int udp_associate_start(socks_session_t *session) {
     session->udp_client_handle = NULL;
     return -1;
   }
-  session->udp_sessions = malloc(sizeof(hash_map_t));
-  LOG_TRACE(TAG, "malloc udp sessions: %p", session->udp_sessions);
-  if (session->udp_sessions == NULL) {
-    LOG_ERROR(TAG, "alloc memory failed");
-    uv_close((uv_handle_t *)session->udp_client_handle, on_close);
-    session->udp_client_handle = NULL;
-    return -1;
-  }
-  if (hash_map_init(session->udp_sessions, 16) != 0) {
+  if (hash_map_init(&session->udp_sessions, 16) != 0) {
     LOG_ERROR(TAG, "udp associate start: hash map init failed");
-    LOG_TRACE(TAG, "free udp sessions: %p", session->udp_sessions);
-    free(session->udp_sessions);
     uv_close((uv_handle_t *)session->udp_client_handle, on_close);
     session->udp_client_handle = NULL;
     return -1;
@@ -397,12 +385,9 @@ error:
 
 void udp_associate_stop(socks_session_t *session) {
   assert(session != NULL);
-  if (session->udp_sessions != NULL) {
-    hash_map_destroy(session->udp_sessions,
+  if (session->udp_sessions.buckets != NULL) {
+    hash_map_destroy(&session->udp_sessions,
                      (void (*)(void *))udp_session_destroy);
-    LOG_TRACE(TAG, "free udp sessions: %p", session->udp_sessions);
-    free(session->udp_sessions);
-    session->udp_sessions = NULL;
   }
   if (session->udp_client_handle != NULL) {
     session->udp_client_handle->data = NULL;

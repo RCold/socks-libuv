@@ -71,7 +71,7 @@ static int parse_socks5_addr(const uv_buf_t *buf, socks_addr_t *addr) {
     addr4->sin_family = AF_INET;
     memcpy(&addr4->sin_addr, buf->base + 1, 4);
     memcpy(&addr4->sin_port, buf->base + 5, 2);
-    addr->domain_name = NULL;
+    addr->domain_name[0] = '\0';
     return 7;
   }
   case SOCKS5_ADDR_TYPE_DOMAIN_NAME: {
@@ -85,12 +85,7 @@ static int parse_socks5_addr(const uv_buf_t *buf, socks_addr_t *addr) {
     if (buf->len < 2 + n + 2) {
       return 0;
     }
-    addr->domain_name = malloc(n + 1);
-    LOG_TRACE(TAG, "malloc domain name: %p", addr->domain_name);
-    if (addr->domain_name == NULL) {
-      LOG_ERROR(TAG, "alloc memory failed");
-      return -1;
-    }
+    assert(n <= MAX_DOMAIN_NAME_LEN);
     memcpy(addr->domain_name, buf->base + 2, n);
     addr->domain_name[n] = '\0';
     struct sockaddr_in *addr4 = (struct sockaddr_in *)&addr->sockaddr;
@@ -106,7 +101,7 @@ static int parse_socks5_addr(const uv_buf_t *buf, socks_addr_t *addr) {
     addr6->sin6_family = AF_INET6;
     memcpy(&addr6->sin6_addr, buf->base + 1, 16);
     memcpy(&addr6->sin6_port, buf->base + 17, 2);
-    addr->domain_name = NULL;
+    addr->domain_name[0] = '\0';
     return 19;
   }
   default:
