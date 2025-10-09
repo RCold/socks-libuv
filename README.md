@@ -7,8 +7,8 @@ A minimal SOCKS server implemented based on [libuv](https://github.com/libuv/lib
 - Asynchronous non-blocking I/O based on libuv event loop
 - Ultra lightweight
 - Cross-platform support (Windows/Linux/macOS)
-- SOCKS4 is supported
-- SOCKS4a is supported
+- SOCKS4 connect is supported
+- SOCKS4a connect is supported
 - SOCKS5 no-auth method (`0x00`) is supported
 - SOCKS5 connect is supported
 

@@ -41,6 +41,7 @@ typedef enum {
   STATE_CONNECTING,
   STATE_RELAYING,
   STATE_UDP_ASSOCIATING,
+  STATE_BLACKHOLE,
 } socks_client_state_t;
 
 typedef struct {

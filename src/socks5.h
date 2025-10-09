@@ -28,8 +28,8 @@ int parse_socks5_request(socks_session_t *session);
 int send_socks5_response(socks_session_t *session, uint8_t code,
                          const struct sockaddr *addr);
 
-int parse_socks5_udp_header(const uv_buf_t *buf, socks_udp_header_t *header,
-                            const char *client_addr);
-int build_socks5_udp_header(const uv_buf_t *buf, const struct sockaddr *addr);
+int parse_socks5_udp_header(const char *client_addr, const uv_buf_t *buf,
+                            socks_udp_header_t *header);
+int build_socks5_udp_header(const struct sockaddr *addr, const uv_buf_t *buf);
 
 #endif

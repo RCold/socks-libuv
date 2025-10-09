@@ -63,6 +63,7 @@ int send_socks5_response(socks_session_t *session, const uint8_t code,
 
 static int parse_socks5_addr(const uv_buf_t *buf, socks_addr_t *addr) {
   assert(buf != NULL);
+  assert(addr != NULL);
   if (buf->len < 1) {
     return 0;
   }
@@ -168,9 +169,11 @@ int parse_socks5_request(socks_session_t *session) {
   return -1;
 }
 
-int parse_socks5_udp_header(const uv_buf_t *buf, socks_udp_header_t *header,
-                            const char *client_addr) {
+int parse_socks5_udp_header(const char *client_addr, const uv_buf_t *buf,
+                            socks_udp_header_t *header) {
+  assert(client_addr != NULL);
   assert(buf != NULL);
+  assert(header != NULL);
   if (buf->len < 4) {
     return -1;
   }
@@ -199,7 +202,9 @@ int parse_socks5_udp_header(const uv_buf_t *buf, socks_udp_header_t *header,
   return -1;
 }
 
-int build_socks5_udp_header(const uv_buf_t *buf, const struct sockaddr *addr) {
+int build_socks5_udp_header(const struct sockaddr *addr, const uv_buf_t *buf) {
+  assert(addr != NULL);
+  assert(buf != NULL);
   if (addr->sa_family == AF_INET) {
     if (buf->len < 10) {
       return -1;

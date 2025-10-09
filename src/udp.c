@@ -51,7 +51,7 @@ static void on_remote_udp_recv(uv_udp_t *handle, const ssize_t nread,
     goto cleanup;
   }
   const uv_buf_t header_buf = uv_buf_init(data, MAX_UDP_HEADER_LEN);
-  const int header_len = build_socks5_udp_header(&header_buf, addr);
+  const int header_len = build_socks5_udp_header(addr, &header_buf);
   assert(header_len > 0 && header_len <= MAX_UDP_HEADER_LEN);
   memcpy(data + header_len, buf->base, nread);
   uv_udp_send_t *send_req = malloc(sizeof(uv_udp_send_t));
@@ -77,23 +77,43 @@ static void on_remote_udp_recv(uv_udp_t *handle, const ssize_t nread,
     free(send_req);
   }
 cleanup:
-  if (buf->base != NULL) {
-    LOG_TRACE(TAG, "free buf: %p", buf->base);
-    free(buf->base);
-  }
+  free_buf(buf);
   LOG_TRACE(TAG, "on remote udp recv return");
 }
 
-static void alloc_buf(uv_handle_t *__attribute__((unused)) handle,
-                      const size_t suggested_size, uv_buf_t *buf) {
-  buf->base = malloc(suggested_size);
-  LOG_TRACE(TAG, "malloc buf: %p", buf->base);
-  if (buf->base == NULL) {
-    LOG_ERROR(TAG, "alloc memory failed");
-    buf->len = 0;
+static int handle_client_data(const socks_udp_session_t *udp_session,
+                              const uv_buf_t *buf,
+                              const struct sockaddr *addr) {
+  assert(udp_session != NULL);
+  assert(buf != NULL);
+  assert(addr != NULL);
+  uv_udp_t *remote_handle;
+  if (addr->sa_family == AF_INET) {
+    remote_handle = udp_session->udp4_remote_handle;
+  } else if (addr->sa_family == AF_INET6) {
+    remote_handle = udp_session->udp6_remote_handle;
   } else {
-    buf->len = suggested_size;
+    LOG_ERROR(TAG, "handle client data: invalid address family");
+    return -1;
   }
+  uv_udp_send_t *send_req = malloc(sizeof(uv_udp_send_t));
+  LOG_TRACE(TAG, "malloc udp send req: %p", send_req);
+  if (send_req == NULL) {
+    LOG_ERROR(TAG, "alloc memory failed");
+    return -1;
+  }
+  assert(buf->base != NULL && buf->len > 0);
+  send_req->data = buf->base;
+  const uv_buf_t bufs[] = {uv_buf_init(buf->base, buf->len)};
+  int err;
+  if ((err = uv_udp_send(send_req, remote_handle, bufs, 1, addr,
+                         on_udp_send)) != 0) {
+    LOG_ERROR(TAG, "handle client data: udp send failed: %s", uv_strerror(err));
+    LOG_TRACE(TAG, "free udp send req: %p", send_req);
+    free(send_req);
+    return -1;
+  }
+  return 0;
 }
 
 static void on_close(uv_handle_t *handle) {
@@ -103,7 +123,7 @@ static void on_close(uv_handle_t *handle) {
   LOG_TRACE(TAG, "on close return");
 }
 
-static void udp_session_destroy(socks_udp_session_t *session) {
+static void free_udp_session(socks_udp_session_t *session) {
   assert(session != NULL);
   session->udp_client_handle = NULL;
   if (session->udp4_remote_handle != NULL) {
@@ -159,7 +179,7 @@ static void on_client_udp_recv(uv_udp_t *handle, const ssize_t nread,
   const uv_buf_t header_buf = uv_buf_init(buf->base, nread);
   socks_udp_header_t header;
   const size_t header_len =
-      parse_socks5_udp_header(&header_buf, &header, client_addr);
+      parse_socks5_udp_header(client_addr, &header_buf, &header);
   if (header_len <= 0) {
     goto cleanup;
   }
@@ -181,8 +201,7 @@ static void on_client_udp_recv(uv_udp_t *handle, const ssize_t nread,
       goto cleanup;
     }
     memset(udp_session, 0, sizeof(socks_udp_session_t));
-    memcpy(&udp_session->client_sockaddr, addr,
-           sizeof(struct sockaddr_storage));
+    sockaddr_copy((struct sockaddr *)&udp_session->client_sockaddr, addr);
     strcpy(udp_session->client_addr, client_addr);
     udp_session->udp_client_handle = session->udp_client_handle;
     udp_session->udp4_remote_handle = malloc(sizeof(uv_udp_t));
@@ -269,38 +288,11 @@ static void on_client_udp_recv(uv_udp_t *handle, const ssize_t nread,
     goto cleanup;
   }
   memcpy(data, buf->base + header_len, nread - header_len);
-  uv_udp_send_t *send_req = malloc(sizeof(uv_udp_send_t));
-  LOG_TRACE(TAG, "malloc udp send req: %p", send_req);
-  if (send_req == NULL) {
-    LOG_ERROR(TAG, "alloc memory failed");
+  const uv_buf_t data_buf = uv_buf_init(data, nread - header_len);
+  if (handle_client_data(udp_session, &data_buf,
+                         (struct sockaddr *)&header.addr.sockaddr) != 0) {
     LOG_TRACE(TAG, "free buf: %p", data);
     free(data);
-    goto cleanup;
-  }
-  send_req->data = data;
-  uv_udp_t *remote_handle;
-  if (header.addr.sockaddr.ss_family == AF_INET) {
-    remote_handle = udp_session->udp4_remote_handle;
-  } else if (header.addr.sockaddr.ss_family == AF_INET6) {
-    remote_handle = udp_session->udp6_remote_handle;
-  } else {
-    LOG_ERROR(TAG, "on client udp recv: invalid address family");
-    LOG_TRACE(TAG, "free buf: %p", data);
-    free(data);
-    LOG_TRACE(TAG, "free udp send req: %p", send_req);
-    free(send_req);
-    goto cleanup;
-  }
-  const uv_buf_t bufs[] = {uv_buf_init(data, nread - header_len)};
-  int err;
-  if ((err = uv_udp_send(send_req, remote_handle, bufs, 1,
-                         (struct sockaddr *)&header.addr.sockaddr,
-                         on_udp_send)) != 0) {
-    LOG_ERROR(TAG, "on client udp recv: udp send failed: %s", uv_strerror(err));
-    LOG_TRACE(TAG, "free buf: %p", data);
-    free(data);
-    LOG_TRACE(TAG, "free udp send req: %p", send_req);
-    free(send_req);
   }
   goto cleanup;
 error:
@@ -308,12 +300,9 @@ error:
   udp_session->udp4_remote_handle = NULL;
   uv_close((uv_handle_t *)udp_session->udp6_remote_handle, on_close);
   udp_session->udp6_remote_handle = NULL;
-  udp_session_destroy(udp_session);
+  free_udp_session(udp_session);
 cleanup:
-  if (buf->base != NULL) {
-    LOG_TRACE(TAG, "free buf: %p", buf->base);
-    free(buf->base);
-  }
+  free_buf(buf);
   LOG_TRACE(TAG, "on client udp recv return");
 }
 
@@ -328,8 +317,8 @@ int udp_associate_start(socks_session_t *session) {
     return -1;
   }
   int err;
-  if ((err = uv_udp_init(session->server->loop, session->udp_client_handle)) !=
-      0) {
+  if ((err = uv_udp_init(session->tcp_client_handle->loop,
+                         session->udp_client_handle)) != 0) {
     LOG_ERROR(TAG, "udp associate start: udp init failed: %s",
               uv_strerror(err));
     LOG_TRACE(TAG, "free udp client handle: %p", session->udp_client_handle);
@@ -344,12 +333,7 @@ int udp_associate_start(socks_session_t *session) {
     return -1;
   }
   struct sockaddr_storage bind_addr = session->server->sockaddr;
-  if (bind_addr.ss_family == AF_INET) {
-    ((struct sockaddr_in *)&bind_addr)->sin_port = 0;
-  } else if (bind_addr.ss_family == AF_INET6) {
-    ((struct sockaddr_in6 *)&bind_addr)->sin6_port = 0;
-  } else {
-    LOG_ERROR(TAG, "udp associate start: invalid address family");
+  if (sockaddr_set_port((struct sockaddr *)&bind_addr, 0) != 0) {
     uv_close((uv_handle_t *)session->udp_client_handle, on_close);
     session->udp_client_handle = NULL;
     udp_associate_stop(session);
@@ -390,10 +374,7 @@ error:
 
 void udp_associate_stop(socks_session_t *session) {
   assert(session != NULL);
-  if (session->udp_sessions.buckets != NULL) {
-    hash_map_destroy(&session->udp_sessions,
-                     (void (*)(void *))udp_session_destroy);
-  }
+  hash_map_destroy(&session->udp_sessions, (void (*)(void *))free_udp_session);
   if (session->udp_client_handle != NULL) {
     session->udp_client_handle->data = NULL;
     uv_udp_recv_stop(session->udp_client_handle);

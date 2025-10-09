@@ -15,6 +15,42 @@
 
 #define TAG "util"
 
+int sockaddr_get_port(const struct sockaddr *addr, uint16_t *port) {
+  if (addr->sa_family == AF_INET) {
+    *port = ntohs(((struct sockaddr_in *)addr)->sin_port);
+  } else if (addr->sa_family == AF_INET6) {
+    *port = ntohs(((struct sockaddr_in6 *)addr)->sin6_port);
+  } else {
+    LOG_ERROR(TAG, "sockaddr get port: invalid address family");
+    return -1;
+  }
+  return 0;
+}
+
+int sockaddr_set_port(struct sockaddr *addr, const uint16_t port) {
+  if (addr->sa_family == AF_INET) {
+    ((struct sockaddr_in *)addr)->sin_port = htons(port);
+  } else if (addr->sa_family == AF_INET6) {
+    ((struct sockaddr_in6 *)addr)->sin6_port = htons(port);
+  } else {
+    LOG_ERROR(TAG, "sockaddr set port: invalid address family");
+    return -1;
+  }
+  return 0;
+}
+
+void *sockaddr_copy(struct sockaddr *dst, const struct sockaddr *src) {
+  if (src->sa_family == AF_INET) {
+    return memcpy(dst, src, sizeof(struct sockaddr_in));
+  }
+  if (src->sa_family == AF_INET6) {
+    return memcpy(dst, src, sizeof(struct sockaddr_in6));
+  }
+  LOG_ERROR(TAG, "sockaddr copy: invalid address family");
+  dst->sa_family = AF_UNSPEC;
+  return NULL;
+}
+
 int getaddrname(const struct sockaddr *addr, char *dst, const size_t size) {
   char ip[INET6_ADDRSTRLEN];
   uint16_t port;
@@ -31,6 +67,25 @@ int getaddrname(const struct sockaddr *addr, char *dst, const size_t size) {
     return UV_EINVAL;
   }
   return 0;
+}
+
+void alloc_buf(uv_handle_t *__attribute__((unused)) handle,
+               const size_t suggested_size, uv_buf_t *buf) {
+  buf->base = malloc(suggested_size);
+  LOG_TRACE(TAG, "malloc buf: %p", buf->base);
+  if (buf->base == NULL) {
+    LOG_ERROR(TAG, "alloc memory failed");
+    buf->len = 0;
+  } else {
+    buf->len = suggested_size;
+  }
+}
+
+void free_buf(const uv_buf_t *buf) {
+  if (buf->base != NULL) {
+    LOG_TRACE(TAG, "free buf: %p", buf->base);
+    free(buf->base);
+  }
 }
 
 void buf_init(buf_t *buf) {
@@ -72,6 +127,16 @@ int buf_consume(buf_t *buf, const size_t len) {
   return 0;
 }
 
+void buf_destroy(buf_t *buf) {
+  if (buf->base != NULL) {
+    LOG_TRACE(TAG, "free buf: %p", buf->base);
+    free(buf->base);
+    buf->base = NULL;
+  }
+  buf->size = 0;
+  buf->capacity = 0;
+}
+
 static unsigned long int hash_function(const char *str) {
   unsigned long int hash = 5381;
   int c;
@@ -97,7 +162,7 @@ int hash_map_init(hash_map_t *map, size_t bucket_count) {
 }
 
 int hash_map_put(hash_map_t *map, const char *key, void *value) {
-  if (map == NULL || key == NULL) {
+  if (key == NULL) {
     return -1;
   }
   const unsigned long int hash = hash_function(key);
@@ -134,7 +199,7 @@ int hash_map_put(hash_map_t *map, const char *key, void *value) {
 }
 
 void *hash_map_get(const hash_map_t *map, const char *key) {
-  if (map == NULL || key == NULL) {
+  if (key == NULL) {
     return NULL;
   }
   const unsigned long int hash = hash_function(key);
@@ -150,7 +215,7 @@ void *hash_map_get(const hash_map_t *map, const char *key) {
 }
 
 int hash_map_remove(hash_map_t *map, const char *key) {
-  if (map == NULL || key == NULL) {
+  if (key == NULL) {
     return -1;
   }
   const unsigned long int hash = hash_function(key);
@@ -177,17 +242,9 @@ int hash_map_remove(hash_map_t *map, const char *key) {
   return -1;
 }
 
-size_t hash_map_size(const hash_map_t *map) {
-  if (map == NULL) {
-    return 0;
-  }
-  return map->size;
-}
+size_t hash_map_size(const hash_map_t *map) { return map->size; }
 
 void hash_map_clear(hash_map_t *map, void (*value_destructor)(void *)) {
-  if (map == NULL) {
-    return;
-  }
   for (size_t i = 0; i < map->bucket_count; i++) {
     hash_map_entry_t *entry = map->buckets[i];
     while (entry != NULL) {
@@ -207,12 +264,85 @@ void hash_map_clear(hash_map_t *map, void (*value_destructor)(void *)) {
 }
 
 void hash_map_destroy(hash_map_t *map, void (*value_destructor)(void *)) {
-  if (map == NULL) {
-    return;
+  if (map->buckets != NULL) {
+    hash_map_clear(map, value_destructor);
+    LOG_TRACE(TAG, "free hash map buckets: %p", map->buckets);
+    free(map->buckets);
+    map->buckets = NULL;
   }
-  hash_map_clear(map, value_destructor);
-  LOG_TRACE(TAG, "free hash map buckets: %p", map->buckets);
-  free(map->buckets);
-  map->buckets = NULL;
   map->bucket_count = 0;
+  map->size = 0;
+}
+
+void queue_init(queue_t *queue) {
+  queue->front = NULL;
+  queue->rear = NULL;
+  queue->size = 0;
+}
+
+int queue_enqueue(queue_t *queue, void *data) {
+  queue_node_t *node = malloc(sizeof(queue_node_t));
+  LOG_TRACE(TAG, "malloc queue node: %p", node);
+  if (node == NULL) {
+    LOG_ERROR(TAG, "alloc memory failed");
+    return -1;
+  }
+  node->data = data;
+  node->next = NULL;
+  if (queue->rear == NULL) {
+    queue->front = node;
+    queue->rear = node;
+  } else {
+    queue->rear->next = node;
+    queue->rear = node;
+  }
+  queue->size++;
+  return 0;
+}
+
+void *queue_dequeue(queue_t *queue) {
+  if (queue->front == NULL) {
+    return NULL;
+  }
+  queue_node_t *node = queue->front;
+  void *data = node->data;
+  queue->front = node->next;
+  if (queue->front == NULL) {
+    queue->rear = NULL;
+  }
+  LOG_TRACE(TAG, "free queue node: %p", node);
+  free(node);
+  queue->size--;
+  return data;
+}
+
+void *queue_peek(const queue_t *queue) {
+  if (queue->front == NULL) {
+    return NULL;
+  }
+  return queue->front->data;
+}
+
+int queue_is_empty(const queue_t *queue) { return queue->front == NULL; }
+
+size_t queue_size(const queue_t *queue) { return queue->size; }
+
+void queue_clear(queue_t *queue, void (*data_destructor)(void *)) {
+  queue_node_t *current = queue->front;
+  while (current != NULL) {
+    queue_node_t *next = current->next;
+    if (data_destructor != NULL && current->data != NULL) {
+      data_destructor(current->data);
+    }
+    LOG_TRACE(TAG, "free queue node: %p", current);
+    free(current);
+    current = next;
+  }
+  queue->front = NULL;
+  queue->rear = NULL;
+  queue->size = 0;
+}
+
+void queue_destroy(queue_t *queue, void (*data_destructor)(void *)) {
+  queue_clear(queue, data_destructor);
 }
