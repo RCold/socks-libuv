@@ -11,6 +11,7 @@ A minimal SOCKS server implemented based on [libuv](https://github.com/libuv/lib
 - SOCKS4a connect is supported
 - SOCKS5 no-auth method (`0x00`) is supported
 - SOCKS5 connect is supported
+- SOCKS5 UDP associate is supported
 
 ## Building
 

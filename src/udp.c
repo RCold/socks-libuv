@@ -4,6 +4,9 @@
  */
 
 #include <assert.h>
+#include <inttypes.h>
+#include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <uv.h>
@@ -17,6 +20,12 @@
 #define TAG "udp"
 
 #define MAX_UDP_HEADER_LEN 22
+
+typedef struct {
+  socks_udp_session_t *udp_session;
+  uv_buf_t data_buf;
+  socks_addr_t addr;
+} getaddrinfo_context_t;
 
 static void on_udp_send(uv_udp_send_t *req, const int status) {
   LOG_TRACE(TAG, "on udp send: %d", status);
@@ -116,11 +125,123 @@ static int handle_client_data(const socks_udp_session_t *udp_session,
   return 0;
 }
 
+static void free_getaddrinfo_context(getaddrinfo_context_t *context) {
+  assert(context != NULL);
+  if (context->data_buf.base != NULL) {
+    LOG_TRACE(TAG, "free buf: %p", context->data_buf.base);
+    free(context->data_buf.base);
+    context->data_buf = uv_buf_init(NULL, 0);
+  }
+  LOG_TRACE(TAG, "free getaddrinfo context: %p", context);
+  free(context);
+}
+
+static void free_getaddrinfo_req(uv_getaddrinfo_t *req) {
+  assert(req != NULL);
+  if (req->data != NULL) {
+    free_getaddrinfo_context(req->data);
+    req->data = NULL;
+  }
+  LOG_TRACE(TAG, "free getaddrinfo req: %p", req);
+  free(req);
+}
+
+static void resolve_addr(socks_udp_session_t *udp_session);
+
+static void on_addr_resolve(uv_getaddrinfo_t *req, const int status,
+                            struct addrinfo *res) {
+  LOG_TRACE(TAG, "on addr resolve: %d", status);
+  getaddrinfo_context_t *context = req->data;
+  socks_udp_session_t *udp_session = NULL;
+  if (context != NULL) {
+    udp_session = context->udp_session;
+    queue_dequeue(&udp_session->resolve_queue);
+  }
+  if (status != 0) {
+    LOG_ERROR(TAG, "on addr resolve failed: %s", uv_strerror(status));
+    goto cleanup;
+  }
+  if (context == NULL) {
+    goto cleanup;
+  }
+  struct sockaddr *addr = malloc(sizeof(struct sockaddr_storage));
+  LOG_TRACE(TAG, "malloc sockaddr: %p", addr);
+  if (addr == NULL) {
+    LOG_ERROR(TAG, "alloc memory failed");
+    goto cleanup;
+  }
+  sockaddr_copy(addr, res->ai_addr);
+  if (sockaddr_set_port(addr, 0) != 0 ||
+      hash_map_put(&udp_session->resolve_cache, context->addr.domain_name,
+                   addr) != 0) {
+    LOG_TRACE(TAG, "free sockaddr: %p", addr);
+    free(addr);
+    goto cleanup;
+  }
+  if (handle_client_data(udp_session, &context->data_buf, res->ai_addr) == 0) {
+    context->data_buf = uv_buf_init(NULL, 0);
+  }
+cleanup:
+  free_getaddrinfo_req(req);
+  uv_freeaddrinfo(res);
+  if (udp_session != NULL) {
+    resolve_addr(udp_session);
+  }
+  LOG_TRACE(TAG, "on addr resolve return");
+}
+
+static void resolve_addr(socks_udp_session_t *udp_session) {
+  assert(udp_session != NULL);
+  uv_getaddrinfo_t *getaddrinfo_req = queue_peek(&udp_session->resolve_queue);
+  if (getaddrinfo_req == NULL) {
+    return;
+  }
+  getaddrinfo_context_t *context = getaddrinfo_req->data;
+  assert(context != NULL);
+  uint16_t port;
+  if (sockaddr_get_port((struct sockaddr *)&context->addr.sockaddr, &port) !=
+      0) {
+    goto cleanup;
+  }
+  const struct sockaddr *addr =
+      hash_map_get(&udp_session->resolve_cache, context->addr.domain_name);
+  if (addr != NULL) {
+    sockaddr_copy((struct sockaddr *)&context->addr.sockaddr, addr);
+    if (sockaddr_set_port((struct sockaddr *)&context->addr.sockaddr, port) ==
+            0 &&
+        handle_client_data(udp_session, &context->data_buf,
+                           (struct sockaddr *)&context->addr.sockaddr) == 0) {
+      context->data_buf = uv_buf_init(NULL, 0);
+    }
+    goto cleanup;
+  }
+  char service[MAX_PORT_LEN + 1];
+  snprintf(service, sizeof(service), "%" PRIu16, port);
+  int err;
+  if ((err = uv_getaddrinfo(udp_session->udp_client_handle->loop,
+                            getaddrinfo_req, on_addr_resolve,
+                            context->addr.domain_name, service, NULL)) != 0) {
+    LOG_ERROR(TAG, "resolve addr: getaddrinfo failed: %s", uv_strerror(err));
+    goto cleanup;
+  }
+  return;
+cleanup:
+  free_getaddrinfo_req(getaddrinfo_req);
+  queue_dequeue(&udp_session->resolve_queue);
+  resolve_addr(udp_session);
+}
+
 static void on_close(uv_handle_t *handle) {
   LOG_TRACE(TAG, "on close");
   LOG_TRACE(TAG, "free handle: %p", handle);
   free(handle);
   LOG_TRACE(TAG, "on close return");
+}
+
+static void free_sockaddr(struct sockaddr *addr) {
+  assert(addr != NULL);
+  LOG_TRACE(TAG, "free sockaddr: %p", addr);
+  free(addr);
 }
 
 static void free_udp_session(socks_udp_session_t *session) {
@@ -140,6 +261,15 @@ static void free_udp_session(socks_udp_session_t *session) {
     uv_close((uv_handle_t *)session->udp6_remote_handle, on_close);
     session->udp6_remote_handle = NULL;
   }
+  hash_map_destroy(&session->resolve_cache, (void (*)(void *))free_sockaddr);
+  uv_getaddrinfo_t *getaddrinfo_req = queue_dequeue(&session->resolve_queue);
+  if (getaddrinfo_req != NULL) {
+    free_getaddrinfo_context(getaddrinfo_req->data);
+    getaddrinfo_req->data = NULL;
+    uv_cancel((uv_req_t *)getaddrinfo_req);
+  }
+  queue_destroy(&session->resolve_queue,
+                (void (*)(void *))free_getaddrinfo_req);
   LOG_DEBUG(TAG, "udp session for client %s closed", session->client_addr);
   LOG_TRACE(TAG, "free udp session: %p", session);
   free(session);
@@ -183,14 +313,6 @@ static void on_client_udp_recv(uv_udp_t *handle, const ssize_t nread,
   if (header_len <= 0) {
     goto cleanup;
   }
-  if (header.addr.domain_name[0] != '\0') {
-    LOG_ERROR(
-        TAG,
-        "failed to handle udp packet from client %s: domain name not supported",
-        client_addr);
-    goto cleanup;
-  }
-  assert(session->udp_sessions.buckets != NULL);
   socks_udp_session_t *udp_session =
       hash_map_get(&session->udp_sessions, client_addr);
   if (udp_session == NULL) {
@@ -249,6 +371,14 @@ static void on_client_udp_recv(uv_udp_t *handle, const ssize_t nread,
       goto cleanup;
     }
     udp_session->udp6_remote_handle->data = udp_session;
+    if (hash_map_init(&udp_session->resolve_cache, 16) != 0) {
+      uv_close((uv_handle_t *)udp_session->udp4_remote_handle, on_close);
+      uv_close((uv_handle_t *)udp_session->udp6_remote_handle, on_close);
+      LOG_TRACE(TAG, "free udp session: %p", udp_session);
+      free(udp_session);
+      goto cleanup;
+    }
+    queue_init(&udp_session->resolve_queue);
     struct sockaddr_storage addr4, addr6;
     uv_ip4_addr("0.0.0.0", 0, (struct sockaddr_in *)&addr4);
     uv_ip6_addr("::", 0, (struct sockaddr_in6 *)&addr6);
@@ -288,11 +418,46 @@ static void on_client_udp_recv(uv_udp_t *handle, const ssize_t nread,
     goto cleanup;
   }
   memcpy(data, buf->base + header_len, nread - header_len);
-  const uv_buf_t data_buf = uv_buf_init(data, nread - header_len);
-  if (handle_client_data(udp_session, &data_buf,
-                         (struct sockaddr *)&header.addr.sockaddr) != 0) {
+  if (header.addr.domain_name[0] == '\0') {
+    const uv_buf_t data_buf = uv_buf_init(data, nread - header_len);
+    if (handle_client_data(udp_session, &data_buf,
+                           (struct sockaddr *)&header.addr.sockaddr) != 0) {
+      LOG_TRACE(TAG, "free buf: %p", data);
+      free(data);
+    }
+    goto cleanup;
+  }
+  if (queue_size(&udp_session->resolve_queue) >= 32) {
     LOG_TRACE(TAG, "free buf: %p", data);
     free(data);
+    goto cleanup;
+  }
+  getaddrinfo_context_t *context = malloc(sizeof(getaddrinfo_context_t));
+  LOG_TRACE(TAG, "malloc getaddrinfo context: %p", context);
+  if (context == NULL) {
+    LOG_ERROR(TAG, "alloc memory failed");
+    LOG_TRACE(TAG, "free buf: %p", data);
+    free(data);
+    goto cleanup;
+  }
+  context->udp_session = udp_session;
+  context->data_buf = uv_buf_init(data, nread - header_len);
+  context->addr = header.addr;
+  uv_getaddrinfo_t *getaddrinfo_req = malloc(sizeof(uv_getaddrinfo_t));
+  LOG_TRACE(TAG, "malloc getaddrinfo req: %p", getaddrinfo_req);
+  if (getaddrinfo_req == NULL) {
+    LOG_ERROR(TAG, "alloc memory failed");
+    free_getaddrinfo_context(context);
+    goto cleanup;
+  }
+  getaddrinfo_req->data = context;
+  const int need_start_resolve = queue_is_empty(&udp_session->resolve_queue);
+  if (queue_enqueue(&udp_session->resolve_queue, getaddrinfo_req) != 0) {
+    free_getaddrinfo_req(getaddrinfo_req);
+    goto cleanup;
+  }
+  if (need_start_resolve) {
+    resolve_addr(udp_session);
   }
   goto cleanup;
 error:

@@ -73,6 +73,8 @@ typedef struct {
   uv_udp_t *udp6_remote_handle;
   struct sockaddr_storage client_sockaddr;
   char client_addr[INET6_ADDRSTRLEN + 3 + MAX_PORT_LEN + 1];
+  hash_map_t resolve_cache;
+  queue_t resolve_queue;
 } socks_udp_session_t;
 
 int socks_server_init(socks_server_t *server, uv_loop_t *loop, const char *host,
