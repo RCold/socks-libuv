@@ -11,7 +11,7 @@
 
 #include "socks.h"
 
-#define VERSION "0.1.2"
+#define VERSION "0.2.0"
 
 typedef struct {
   char *bind;
