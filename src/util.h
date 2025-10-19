@@ -8,6 +8,8 @@
 
 #include <uv.h>
 
+#define UNUSED(x) ((void)x)
+
 typedef struct {
   char *base;
   size_t size;
@@ -42,8 +44,7 @@ int sockaddr_set_port(struct sockaddr *addr, uint16_t port);
 void *sockaddr_copy(struct sockaddr *dst, const struct sockaddr *src);
 int getaddrname(const struct sockaddr *addr, char *dst, size_t size);
 
-void alloc_buf(uv_handle_t *__attribute__((unused)) handle,
-               size_t suggested_size, uv_buf_t *buf);
+void alloc_buf(uv_handle_t *handle, size_t suggested_size, uv_buf_t *buf);
 void free_buf(const uv_buf_t *buf);
 
 void buf_init(buf_t *buf);

@@ -43,8 +43,8 @@ static void on_udp_send(uv_udp_send_t *req, const int status) {
 
 static void on_remote_udp_recv(uv_udp_t *handle, const ssize_t nread,
                                const uv_buf_t *buf, const struct sockaddr *addr,
-                               const unsigned int
-                               __attribute__((unused)) flags) {
+                               const unsigned int flags) {
+  UNUSED(flags);
   LOG_TRACE(TAG, "on remote udp recv: %zd", nread);
   if (nread < 0) {
     LOG_ERROR(TAG, "on remote udp recv failed: %s", uv_strerror((int)nread));
@@ -277,8 +277,8 @@ static void free_udp_session(socks_udp_session_t *session) {
 
 static void on_client_udp_recv(uv_udp_t *handle, const ssize_t nread,
                                const uv_buf_t *buf, const struct sockaddr *addr,
-                               const unsigned int
-                               __attribute__((unused)) flags) {
+                               const unsigned int flags) {
+  UNUSED(flags);
   LOG_TRACE(TAG, "on client udp recv: %zd", nread);
   if (nread < 0) {
     LOG_ERROR(TAG, "on client udp recv failed: %s", uv_strerror((int)nread));

@@ -69,8 +69,9 @@ int getaddrname(const struct sockaddr *addr, char *dst, const size_t size) {
   return 0;
 }
 
-void alloc_buf(uv_handle_t *__attribute__((unused)) handle,
-               const size_t suggested_size, uv_buf_t *buf) {
+void alloc_buf(uv_handle_t *handle, const size_t suggested_size,
+               uv_buf_t *buf) {
+  UNUSED(handle);
   buf->base = malloc(suggested_size);
   LOG_TRACE(TAG, "malloc buf: %p", buf->base);
   if (buf->base == NULL) {
