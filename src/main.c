@@ -9,9 +9,8 @@
 #include <stdlib.h>
 #include <uv.h>
 
+#include "config.h"
 #include "socks.h"
-
-#define VERSION "0.2.0"
 
 typedef struct {
   char *bind;
@@ -59,7 +58,7 @@ static int parse_args(const int argc, char *argv[], args_t *args) {
       args->bind = optarg;
       continue;
     case 'V':
-      printf("%s " VERSION "\n", argv[0]);
+      puts(PROJECT_NAME " " PROJECT_VERSION);
       exit(EXIT_SUCCESS);
     default:
       return -1;
