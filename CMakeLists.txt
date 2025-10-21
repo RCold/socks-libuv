@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 cmake_minimum_required(VERSION 3.10)
-project(socks-libuv VERSION 0.2.0 LANGUAGES C)
+project(socks-libuv VERSION 0.2.1 LANGUAGES C)
 set(CMAKE_C_STANDARD 99)
 
 include(CheckIncludeFile)
