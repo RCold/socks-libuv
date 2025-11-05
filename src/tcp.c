@@ -103,7 +103,7 @@ static void on_remote_read(uv_stream_t *stream, const ssize_t nread,
     goto error;
   }
   write_req->data = buf->base;
-  const uv_buf_t bufs[] = {uv_buf_init(buf->base, nread)};
+  const uv_buf_t bufs[] = {uv_buf_init(buf->base, (unsigned int)nread)};
   assert(!uv_is_closing((uv_handle_t *)session->tcp_client_handle));
   int err;
   if ((err = uv_write(write_req, (uv_stream_t *)session->tcp_client_handle,
@@ -192,12 +192,11 @@ static void on_remote_connect(uv_connect_t *req, const int status) {
   if (status != 0) {
     LOG_ERROR(TAG, "on remote connect failed: %s", uv_strerror(status));
     if (session != NULL) {
-      if (session->request.ver == 4 &&
-              send_socks4_response(session, SOCKS4_REP_REJECTED_OR_FAILED) !=
-                  0 ||
-          session->request.ver == 5 &&
-              send_socks5_response(session, SOCKS5_REP_GENERAL_FAILURE, NULL) !=
-                  0) {
+      if ((session->request.ver == 4 &&
+           send_socks4_response(session, SOCKS4_REP_REJECTED_OR_FAILED) != 0) ||
+          (session->request.ver == 5 &&
+           send_socks5_response(session, SOCKS5_REP_GENERAL_FAILURE, NULL) !=
+               0)) {
         goto error;
       }
       uv_close((uv_handle_t *)req->handle, on_close);
@@ -210,10 +209,10 @@ static void on_remote_connect(uv_connect_t *req, const int status) {
     goto cleanup;
   }
   uv_tcp_nodelay((uv_tcp_t *)req->handle, 1);
-  if (session->request.ver == 4 &&
-          send_socks4_response(session, SOCKS4_REP_GRANTED) != 0 ||
-      session->request.ver == 5 &&
-          send_socks5_response(session, SOCKS5_REP_SUCCEEDED, NULL) != 0) {
+  if ((session->request.ver == 4 &&
+       send_socks4_response(session, SOCKS4_REP_GRANTED) != 0) ||
+      (session->request.ver == 5 &&
+       send_socks5_response(session, SOCKS5_REP_SUCCEEDED, NULL) != 0)) {
     goto error;
   }
   int err;
@@ -225,8 +224,8 @@ static void on_remote_connect(uv_connect_t *req, const int status) {
       goto error;
     }
     write_req->data = session->read_buf.base;
-    const uv_buf_t bufs[] = {
-        uv_buf_init(session->read_buf.base, session->read_buf.size)};
+    const uv_buf_t bufs[] = {uv_buf_init(session->read_buf.base,
+                                         (unsigned int)session->read_buf.size)};
     if ((err = uv_write(write_req, req->handle, bufs, 1, on_write)) != 0) {
       LOG_ERROR(TAG, "on remote connect: write failed: %s", uv_strerror(err));
       LOG_TRACE(TAG, "free write req: %p", write_req);
@@ -293,11 +292,11 @@ static int handle_connect(socks_session_t *session,
     session->connect_req = NULL;
     uv_close((uv_handle_t *)session->tcp_remote_handle, on_close);
     session->tcp_remote_handle = NULL;
-    if (session->request.ver == 4 &&
-            send_socks4_response(session, SOCKS4_REP_REJECTED_OR_FAILED) != 0 ||
-        session->request.ver == 5 &&
-            send_socks5_response(session, SOCKS5_REP_GENERAL_FAILURE, NULL) !=
-                0) {
+    if ((session->request.ver == 4 &&
+         send_socks4_response(session, SOCKS4_REP_REJECTED_OR_FAILED) != 0) ||
+        (session->request.ver == 5 &&
+         send_socks5_response(session, SOCKS5_REP_GENERAL_FAILURE, NULL) !=
+             0)) {
       return -1;
     }
     session->state = STATE_BLACKHOLE;
@@ -317,12 +316,11 @@ static void on_addr_resolve(uv_getaddrinfo_t *req, const int status,
   if (status != 0) {
     LOG_ERROR(TAG, "on addr resolve failed: %s", uv_strerror(status));
     if (session != NULL) {
-      if (session->request.ver == 4 &&
-              send_socks4_response(session, SOCKS4_REP_REJECTED_OR_FAILED) !=
-                  0 ||
-          session->request.ver == 5 &&
-              send_socks5_response(session, SOCKS5_REP_GENERAL_FAILURE, NULL) !=
-                  0) {
+      if ((session->request.ver == 4 &&
+           send_socks4_response(session, SOCKS4_REP_REJECTED_OR_FAILED) != 0) ||
+          (session->request.ver == 5 &&
+           send_socks5_response(session, SOCKS5_REP_GENERAL_FAILURE, NULL) !=
+               0)) {
         goto error;
       }
       session->state = STATE_BLACKHOLE;
@@ -487,12 +485,11 @@ static void on_client_read(uv_stream_t *stream, const ssize_t nread,
       LOG_TRACE(TAG, "free getaddrinfo req: %p", session->getaddrinfo_req);
       free(session->getaddrinfo_req);
       session->getaddrinfo_req = NULL;
-      if (session->request.ver == 4 &&
-              send_socks4_response(session, SOCKS4_REP_REJECTED_OR_FAILED) !=
-                  0 ||
-          session->request.ver == 5 &&
-              send_socks5_response(session, SOCKS5_REP_GENERAL_FAILURE, NULL) !=
-                  0) {
+      if ((session->request.ver == 4 &&
+           send_socks4_response(session, SOCKS4_REP_REJECTED_OR_FAILED) != 0) ||
+          (session->request.ver == 5 &&
+           send_socks5_response(session, SOCKS5_REP_GENERAL_FAILURE, NULL) !=
+               0)) {
         goto error;
       }
       session->state = STATE_BLACKHOLE;
@@ -522,7 +519,7 @@ static void on_client_read(uv_stream_t *stream, const ssize_t nread,
       goto error;
     }
     write_req->data = buf->base;
-    const uv_buf_t bufs[] = {uv_buf_init(buf->base, nread)};
+    const uv_buf_t bufs[] = {uv_buf_init(buf->base, (unsigned int)nread)};
     assert(!uv_is_closing((uv_handle_t *)session->tcp_remote_handle));
     int err;
     if ((err = uv_write(write_req, (uv_stream_t *)session->tcp_remote_handle,

@@ -78,7 +78,7 @@ void alloc_buf(uv_handle_t *handle, const size_t suggested_size,
     LOG_ERROR(TAG, "alloc memory failed");
     buf->len = 0;
   } else {
-    buf->len = suggested_size;
+    buf->len = (unsigned int)suggested_size;
   }
 }
 

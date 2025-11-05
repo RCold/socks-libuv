@@ -74,7 +74,8 @@ static void on_remote_udp_recv(uv_udp_t *handle, const ssize_t nread,
   send_req->data = data;
   socks_udp_session_t *udp_session = handle->data;
   assert(udp_session != NULL);
-  const uv_buf_t bufs[] = {uv_buf_init(data, header_len + nread)};
+  const uv_buf_t bufs[] = {
+      uv_buf_init(data, (unsigned int)(header_len + nread))};
   int err;
   if ((err = uv_udp_send(send_req, udp_session->udp_client_handle, bufs, 1,
                          (struct sockaddr *)&udp_session->client_sockaddr,
@@ -292,21 +293,21 @@ static void on_client_udp_recv(uv_udp_t *handle, const ssize_t nread,
   socks_session_t *session = handle->data;
   assert(session != NULL);
   if (addr->sa_family != session->client_sockaddr.ss_family ||
-      addr->sa_family == AF_INET &&
-          ((struct sockaddr_in *)addr)->sin_addr.s_addr !=
-              ((struct sockaddr_in *)&session->client_sockaddr)
-                  ->sin_addr.s_addr ||
-      addr->sa_family == AF_INET6 &&
-          memcmp(&((struct sockaddr_in6 *)addr)->sin6_addr,
-                 &((struct sockaddr_in6 *)&session->client_sockaddr)->sin6_addr,
-                 sizeof(struct in6_addr)) != 0) {
+      (addr->sa_family == AF_INET &&
+       ((struct sockaddr_in *)addr)->sin_addr.s_addr !=
+           ((struct sockaddr_in *)&session->client_sockaddr)
+               ->sin_addr.s_addr) ||
+      (addr->sa_family == AF_INET6 &&
+       memcmp(&((struct sockaddr_in6 *)addr)->sin6_addr,
+              &((struct sockaddr_in6 *)&session->client_sockaddr)->sin6_addr,
+              sizeof(struct in6_addr)) != 0)) {
     LOG_INFO(
         TAG,
         "udp packets from client %s dropped: client ip address not allowed",
         client_addr);
     goto cleanup;
   }
-  const uv_buf_t header_buf = uv_buf_init(buf->base, nread);
+  const uv_buf_t header_buf = uv_buf_init(buf->base, (unsigned int)nread);
   socks_udp_header_t header;
   const size_t header_len =
       parse_socks5_udp_header(client_addr, &header_buf, &header);
@@ -419,7 +420,8 @@ static void on_client_udp_recv(uv_udp_t *handle, const ssize_t nread,
   }
   memcpy(data, buf->base + header_len, nread - header_len);
   if (header.addr.domain_name[0] == '\0') {
-    const uv_buf_t data_buf = uv_buf_init(data, nread - header_len);
+    const uv_buf_t data_buf =
+        uv_buf_init(data, (unsigned int)(nread - header_len));
     if (handle_client_data(udp_session, &data_buf,
                            (struct sockaddr *)&header.addr.sockaddr) != 0) {
       LOG_TRACE(TAG, "free buf: %p", data);
@@ -441,7 +443,7 @@ static void on_client_udp_recv(uv_udp_t *handle, const ssize_t nread,
     goto cleanup;
   }
   context->udp_session = udp_session;
-  context->data_buf = uv_buf_init(data, nread - header_len);
+  context->data_buf = uv_buf_init(data, (unsigned int)(nread - header_len));
   context->addr = header.addr;
   uv_getaddrinfo_t *getaddrinfo_req = malloc(sizeof(uv_getaddrinfo_t));
   LOG_TRACE(TAG, "malloc getaddrinfo req: %p", getaddrinfo_req);

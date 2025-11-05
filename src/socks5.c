@@ -6,7 +6,6 @@
 #include <assert.h>
 #include <inttypes.h>
 #include <stdint.h>
-#include <stdlib.h>
 #include <string.h>
 #include <uv.h>
 
@@ -27,7 +26,7 @@ int send_socks5_response(socks_session_t *session, const uint8_t code,
   LOG_TRACE(TAG, "send socks5 response: %" PRIu8, code);
   assert(session != NULL);
   char addr_type;
-  size_t len;
+  unsigned int len;
   if (addr == NULL || addr->sa_family == AF_INET) {
     addr_type = SOCKS5_ADDR_TYPE_IPV4;
     len = 10;
@@ -88,7 +87,7 @@ static int parse_socks5_addr(const uv_buf_t *buf, socks_addr_t *addr) {
     if (n < 1) {
       return SOCKS5_ERR_INVALID_DOMAIN_NAME;
     }
-    if (buf->len < 2 + n + 2) {
+    if (buf->len < (unsigned int)(2 + n + 2)) {
       return 0;
     }
     assert(n <= MAX_DOMAIN_NAME_LEN);
@@ -142,7 +141,8 @@ int parse_socks5_request(socks_session_t *session) {
   }
   session->request.ver = buf->base[0];
   session->request.cmd = buf->base[1];
-  const uv_buf_t addr_buf = uv_buf_init(buf->base + 3, buf->size - 3);
+  const uv_buf_t addr_buf =
+      uv_buf_init(buf->base + 3, (unsigned int)(buf->size - 3));
   const int ret = parse_socks5_addr(&addr_buf, &session->request.addr);
   if (ret > 0) {
     buf_consume(buf, 3 + ret);
