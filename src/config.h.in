@@ -1,2 +1,12 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/*
+ * Copyright (C) 2025 Yeuham Wang <rcold@rcold.name>
+ */
+
+#ifndef SOCKS_LIBUV_CONFIG_H
+#define SOCKS_LIBUV_CONFIG_H
+
 #define PROJECT_NAME "@PROJECT_NAME@"
 #define PROJECT_VERSION "@PROJECT_VERSION@"
+
+#endif
