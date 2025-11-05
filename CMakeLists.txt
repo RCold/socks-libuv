@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 cmake_minimum_required(VERSION 3.10)
-project(socks-libuv VERSION 0.2.1 LANGUAGES C)
+project(socks-libuv VERSION 0.2.2 LANGUAGES C)
 
 include(FetchContent)
 FetchContent_Declare(getopt-win32
